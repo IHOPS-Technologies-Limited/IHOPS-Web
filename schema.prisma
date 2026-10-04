@@ -1,0 +1,697 @@
+// IHOPS — Intelligent Hospital Operation System
+// Prisma schema. Uses SQLite for zero-setup local development.
+// For production, switch datasource provider to "postgresql" and set DATABASE_URL —
+// the schema itself is Postgres-compatible (no SQLite-only features are used).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// TENANTS & PLANS
+// ---------------------------------------------------------------------------
+
+enum TenantStatus {
+  pending_verification
+  pending_approval   // Public Hospital only, post email-verification
+  active
+  trialing
+  grace_period
+  suspended
+  rejected
+}
+
+enum PlanCode {
+  starter
+  standard
+  public_hospital
+}
+
+enum BillingCycle {
+  monthly
+  annual
+  none // Public Hospital: free, gated on approval instead
+}
+
+model Tenant {
+  id                       String   @id @default(cuid())
+  hospitalName             String
+  hospitalType             String
+  contactPerson            String
+  email                    String   @unique
+  phone                    String
+  state                    String
+  lga                      String
+  address                  String
+  nearestLandmark          String?
+  postalCode               String?
+  status                   TenantStatus @default(pending_verification)
+  publicHospitalRequested  Boolean  @default(false)
+  supportingDocumentUrl    String?
+  emailVerificationToken   String?
+  emailVerificationExpires DateTime?
+  trialEndsAt              DateTime?
+  gracePeriodEndsAt        DateTime?
+  setupWizardCompleted     Boolean  @default(false)
+  logoUrl                  String?
+  workingHours             String?  // JSON string e.g. {"mon":"08:00-18:00", ...}
+  currency                 String   @default("NGN")
+  dateFormat               String   @default("DD/MM/YYYY")
+  birthdayMessagesEnabled  Boolean  @default(true)
+  aiRemindersEnabled       Boolean  @default(true)
+  // Added for Module 5: governs the NEW Restricted AI Communication Engine
+  // pipeline only (services/restrictedAiEngine.ts + CommunicationPayload).
+  // Has no effect on the original visit-close reminder flow in
+  // modules/visits/routes.ts, which still uses aiRemindersEnabled above,
+  // unchanged. Defaulted so existing tenant rows remain valid.
+  restrictedAiMode         String   @default("review") // "automatic" | "review"
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  subscription    Subscription?
+  departments     Department[]
+  staff           Staff[]
+  patients        Patient[]
+  families        Family[]
+  visits          Visit[]
+  payments        Payment[]
+  expenses        Expense[]
+  attendances     Attendance[]
+  communications  CommunicationLog[]
+  supportTickets  SupportTicket[]
+  auditLogs       AuditLog[]
+  patientRecordRequests PatientRecordRequest[] // reserved for future IHOPS Exchange
+  smsWallet       SmsWallet?
+}
+
+model Subscription {
+  id                          String    @id @default(cuid())
+  tenant                      Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId                    String    @unique
+  planCode                    PlanCode  @default(starter)
+  billingCycle                BillingCycle @default(monthly)
+  status                      String    @default("trialing") // trialing|active|grace_period|suspended|pending_approval|rejected
+  paystackCustomerCode        String?
+  paystackSubscriptionCode    String?
+  paystackPlanCode            String?
+  publicHospitalApprovalStatus String?  // pending|approved|rejected (only meaningful for public_hospital plan)
+  approvedBySuperAdminId      String?
+  approvedAt                  DateTime?
+  rejectionReason             String?
+  currentPeriodEnd            DateTime?
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+
+  payments PaymentHistory[]
+}
+
+model PaymentHistory {
+  id             String   @id @default(cuid())
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id])
+  subscriptionId String
+  amount         Float
+  currency       String   @default("NGN")
+  status         String   // success|failed|pending
+  paystackReference String?
+  paidAt         DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// STAFF & DEPARTMENTS
+// ---------------------------------------------------------------------------
+
+enum StaffRole {
+  administrator
+  doctor
+  receptionist
+  finance_officer
+  nurse
+}
+
+enum StaffStatus {
+  active
+  inactive
+}
+
+model Department {
+  id       String @id @default(cuid())
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
+  tenantId String
+  name     String
+
+  staff  Staff[]
+  visits Visit[]
+
+  @@unique([tenantId, name])
+}
+
+model Staff {
+  id             String      @id @default(cuid())
+  tenant         Tenant      @relation(fields: [tenantId], references: [id])
+  tenantId       String
+  staffIdDisplay String      // human-facing Staff ID, e.g. IHOPS-0007
+  name           String
+  email          String?
+  phone          String?
+  department     Department? @relation(fields: [departmentId], references: [id])
+  departmentId   String?
+  role           StaffRole
+  pinHash        String
+  mustChangePin  Boolean     @default(true)
+  failedPinAttempts Int      @default(0)
+  lockedUntil    DateTime?
+  status         StaffStatus @default(active)
+  passwordHash   String?     // administrators/staff with email login (dashboard access)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  visitsAsDoctor Visit[]        @relation("DoctorVisits")
+  expenses       Expense[]
+  attendances    Attendance[]
+  supportTicketsRaised SupportTicket[]
+  auditLogs      AuditLog[]
+
+  @@unique([tenantId, staffIdDisplay])
+  @@unique([tenantId, email])
+}
+
+// ---------------------------------------------------------------------------
+// PATIENTS, FAMILIES, VISITS
+// ---------------------------------------------------------------------------
+
+enum PreferredChannel {
+  whatsapp
+  sms
+  email
+}
+
+model Family {
+  id               String    @id @default(cuid())
+  tenant           Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId         String
+  familyIdDisplay  String
+  primaryContactPatientId String?
+  patients         Patient[]
+
+  @@unique([tenantId, familyIdDisplay])
+}
+
+model Patient {
+  id                    String   @id @default(cuid())
+  tenant                Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId              String
+  platformPatientId     String   // system-generated, e.g. PT-00001
+  hospitalCardNumber    String?
+  family                Family?  @relation(fields: [familyId], references: [id])
+  familyId              String?
+  name                  String
+  phone                 String?
+  email                 String?
+  gender                String
+  dob                   DateTime
+  address               String
+  emergencyContact      String
+  guardianName          String?
+  guardianPhone         String?
+  preferredChannel      PreferredChannel
+  administrativeNotes   String?
+  species               String?  // veterinary tenants only
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  visits         Visit[]
+  communications CommunicationLog[]
+
+  @@unique([tenantId, platformPatientId])
+  @@index([tenantId, name])
+  @@index([tenantId, phone])
+}
+
+enum VisitStatus {
+  waiting
+  in_consultation
+  closed
+}
+
+enum FollowUpType {
+  none
+  return_in_days
+  recurring
+}
+
+model Visit {
+  id             String       @id @default(cuid())
+  tenant         Tenant       @relation(fields: [tenantId], references: [id])
+  tenantId       String
+  patient        Patient      @relation(fields: [patientId], references: [id])
+  patientId      String
+  doctor         Staff?       @relation("DoctorVisits", fields: [doctorId], references: [id])
+  doctorId       String?
+  department     Department?  @relation(fields: [departmentId], references: [id])
+  departmentId   String?
+  status         VisitStatus  @default(waiting)
+  treatmentNote  String?
+  followUpType   FollowUpType @default(none)
+  followUpInDays Int?
+  recurringEveryDays Int?
+  recurringCount     Int?
+  startedAt      DateTime     @default(now())
+  closedAt       DateTime?
+
+  payment        Payment?
+  communications CommunicationLog[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, patientId])
+}
+
+// ---------------------------------------------------------------------------
+// FINANCE
+// ---------------------------------------------------------------------------
+
+enum PaymentStatus {
+  paid
+  partially_paid
+  not_paid
+  covered_by_insurance
+}
+
+enum PaymentMethod {
+  cash
+  transfer
+  pos
+  other
+}
+
+model Payment {
+  id                       String        @id @default(cuid())
+  tenant                   Tenant        @relation(fields: [tenantId], references: [id])
+  tenantId                 String
+  visit                    Visit         @relation(fields: [visitId], references: [id])
+  visitId                  String        @unique
+  status                   PaymentStatus
+  amount                   Float?        // amount actually paid (paid / partially_paid)
+  balance                  Float?        // computed remainder for partially_paid
+  method                   PaymentMethod?
+  insuranceProvider        String?
+  expectedInsuranceAmount  Float?
+  insuranceReconciledAmount Float?
+  insuranceReconciled      Boolean       @default(false)
+  createdAt                DateTime      @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+model Expense {
+  id              String   @id @default(cuid())
+  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId        String
+  category        String
+  description     String
+  amount          Float
+  date            DateTime
+  recordedBy      Staff    @relation(fields: [recordedByStaffId], references: [id])
+  recordedByStaffId String
+  createdAt       DateTime @default(now())
+
+  @@index([tenantId, date])
+}
+
+// ---------------------------------------------------------------------------
+// WORKFORCE / ATTENDANCE
+// ---------------------------------------------------------------------------
+
+model Attendance {
+  id               String    @id @default(cuid())
+  tenant           Tenant    @relation(fields: [tenantId], references: [id])
+  tenantId         String
+  staff            Staff     @relation(fields: [staffId], references: [id])
+  staffId          String
+  checkInAt        DateTime?
+  checkOutAt       DateTime?
+  hoursWorked      Float?
+  isAbsentFlagged  Boolean   @default(false)
+  correctedBy      String?   // staffId of admin who made a manual correction
+  correctionNote   String?
+  date             DateTime  // calendar day this record belongs to
+
+  @@index([tenantId, date])
+  @@index([tenantId, staffId])
+}
+
+// ---------------------------------------------------------------------------
+// COMMUNICATIONS
+// ---------------------------------------------------------------------------
+
+enum CommChannel {
+  whatsapp
+  sms
+  email
+}
+
+enum CommStatus {
+  queued
+  sent
+  delivered
+  read
+  failed
+}
+
+enum CommTrigger {
+  ai_followup
+  birthday
+  manual
+  system
+  ai_restricted // added: messages sent via the new Restricted AI Communication Engine / CommunicationPayload pipeline
+}
+
+model CommunicationLog {
+  id           String      @id @default(cuid())
+  tenant       Tenant      @relation(fields: [tenantId], references: [id])
+  tenantId     String
+  patient      Patient     @relation(fields: [patientId], references: [id])
+  patientId    String
+  visit        Visit?      @relation(fields: [visitId], references: [id])
+  visitId      String?
+  trigger      CommTrigger @default(manual)
+  channel      CommChannel
+  messageBody  String
+  status       CommStatus  @default(queued)
+  failureReason String?
+  sentAt       DateTime?
+  deliveredAt  DateTime?
+  createdAt    DateTime    @default(now())
+  payloadId    String?     // added: links back to the CommunicationPayload that produced this log entry, when applicable
+
+  @@index([tenantId, patientId])
+  @@index([tenantId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// SMS WALLET — prepaid, pay-as-you-go SMS units bought in bulk packages via
+// Paystack. A hospital buys units up front (e.g. 100 units for ₦1,000);
+// every outbound SMS to a patient debits exactly 1 unit at send time. The
+// hospital cannot send SMS below a balance of 1 unit and must top up first.
+// WhatsApp and email are NOT billed this way — only the `sms` channel.
+// ---------------------------------------------------------------------------
+
+model SmsWallet {
+  id           String   @id @default(cuid())
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId     String   @unique
+  balanceUnits Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  transactions SmsWalletTransaction[]
+}
+
+enum SmsWalletTxnType {
+  topup      // Paystack payment credited units
+  debit      // 1 unit consumed sending a patient SMS
+  refund     // unit returned because the provider send failed after debit
+  adjustment // manual correction by IHOPS staff (not exposed in this build)
+}
+
+enum SmsWalletTxnStatus {
+  pending // topup initialized at Paystack, webhook not yet received
+  success
+  failed
+}
+
+model SmsWalletTransaction {
+  id                 String              @id @default(cuid())
+  wallet             SmsWallet           @relation(fields: [walletId], references: [id])
+  walletId           String
+  type               SmsWalletTxnType
+  units              Int                 // positive for topup/refund, negative (-1) for debit
+  amountKobo         Int?                // set for topup transactions only
+  status             SmsWalletTxnStatus  @default(success)
+  packageKey         String?             // e.g. "bulk_5k" — which package was purchased (topup only)
+  paystackReference  String?             @unique // idempotency key for topup webhooks
+  communicationLogId String?             // back-reference to the CommunicationLog row this debit/refund paid for
+  description        String?
+  createdAt          DateTime            @default(now())
+
+  @@index([walletId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// SUPPORT, ANNOUNCEMENTS, AUDIT (IHOPS Super Admin Portal)
+// ---------------------------------------------------------------------------
+
+model SuperAdmin {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+}
+
+enum TicketStatus {
+  open
+  in_progress
+  resolved
+}
+
+model SupportTicket {
+  id              String       @id @default(cuid())
+  tenant          Tenant       @relation(fields: [tenantId], references: [id])
+  tenantId        String
+  raisedBy        Staff        @relation(fields: [raisedByStaffId], references: [id])
+  raisedByStaffId String
+  subject         String
+  body            String
+  status          TicketStatus @default(open)
+  assignedSuperAdminId String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  replies SupportTicketReply[]
+}
+
+model SupportTicketReply {
+  id             String        @id @default(cuid())
+  ticket         SupportTicket @relation(fields: [ticketId], references: [id])
+  ticketId       String
+  authorType     String        // "tenant" | "super_admin"
+  authorName     String
+  body           String
+  createdAt      DateTime      @default(now())
+}
+
+model Announcement {
+  id                  String   @id @default(cuid())
+  title               String
+  body                String
+  targetSegment       String   // "all" | "public_hospital" | "grace_period" | "trialing"
+  publishAt           DateTime
+  expiresAt           DateTime?
+  createdBySuperAdminId String
+  createdAt           DateTime @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  tenant     Tenant?  @relation(fields: [tenantId], references: [id])
+  tenantId   String?
+  staff      Staff?   @relation(fields: [staffId], references: [id])
+  staffId    String?
+  actionType String   // e.g. "visit.close", "expense.create", "staff.pin_reset"
+  entityType String
+  entityId   String?
+  metadata   String?  // JSON string
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// MODULE 5 — CLINICAL DOCUMENTATION & MEDICAL RECORD  (added on top of the
+// original build, purely additive: no existing model, field, or route above
+// this line was changed to support it)
+//
+// Governing rules carried over from the PRD addendum:
+//   1. One-entry rule — a clinician enters clinical information once, in the
+//      Clinical Note; the Medical Record is a read/aggregation layer over
+//      ClinicalNote rows for a patient, never a second place to type data.
+//   2. Data boundary rule — the Restricted AI Communication Engine (see
+//      services/restrictedAiEngine.ts) only ever receives a CommunicationPayload,
+//      built server-side from the note's Follow-up & Communication section.
+//      It has no query path to ClinicalNote/MedicalRecord tables at all.
+//   3. No silent overwrites — correcting a finalized note creates a new
+//      versioned row (previousVersionId) rather than mutating history.
+//
+// Repeatable clinical substructures (allergies, medical/medication history,
+// prescriptions, investigations, imaging) are stored as JSON-string fields
+// rather than fully normalized child tables. This keeps the addition small
+// and additive; if/when granular querying across e.g. all patients on a given
+// medication is needed, these can be split into their own tables later
+// without changing the ClinicalNote's outward shape.
+// ---------------------------------------------------------------------------
+
+enum ClinicalNoteStatus {
+  draft
+  finalized
+}
+
+model ClinicalNote {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  visitId            String
+  patientId          String
+  clinicianId        String
+  clinicianRole      String   // snapshot of Staff.role at time of authorship
+  status             ClinicalNoteStatus @default(draft)
+  version            Int      @default(1)
+  previousVersionId  String?  @unique
+  isCurrent          Boolean  @default(true)
+
+  // Complaint / Reason for Visit
+  chiefComplaint     String?
+  symptomsReported   String?
+  complaintDuration  String?
+  complaintNotes     String?
+
+  // Observation & Vitals (not force-required unless hospital-configured)
+  temperature        Float?
+  bloodPressure      String?
+  pulse              Float?
+  respiratoryRate    Float?
+  oxygenSaturation   Float?
+  weightKg           Float?
+  heightCm           Float?
+  observationNotes   String?
+
+  // Diagnosis
+  diagnosisPrimary      String?
+  diagnosisSecondary    String?
+  diagnosisDifferential String?
+  diagnosisNotes        String?
+
+  // Allergies — JSON array of {type, substance, reaction, severity, notes}
+  noKnownAllergies   Boolean  @default(false)
+  allergiesJson      String?
+
+  // Medical History — JSON object {illnesses, chronicConditions, surgeries, hospitalisations, familyHistory, socialHistory}
+  medicalHistoryJson String?
+
+  // Medication History — JSON object {current: [...], previous: [...]}
+  medicationHistoryJson String?
+
+  // Prescription — JSON array of {medication, strength, dosage, frequency, route, duration, quantity, instructions, notes}
+  prescriptionJson   String?
+
+  // Investigations & Results — JSON array of {testRequested, reason, dateRequested, status, resultDate, resultSummary, clinicianInterpretation, resultStatus, documentId}
+  investigationsJson String?
+
+  // Diagnostic Imaging — JSON array of {imagingType, date, findings, impression, clinicianNotes, documentId}
+  imagingJson        String?
+
+  // Treatment / Care Plan
+  treatmentPlan          String?
+  treatmentDuration      String?
+  treatmentFrequency     String?
+  treatmentRoute         String?
+  nextTreatmentDate      DateTime?
+  treatmentTimeOfDay     String?  // Morning | Afternoon | Evening
+  treatmentInstructions  String?
+  treatmentNotes         String?
+
+  // Follow-up & Communication (Section 9.7.4) — the ONLY section the
+  // Restricted AI Communication Engine is ever allowed to read from.
+  followUpRequired           Boolean  @default(false)
+  followUpType                String? // Treatment|Review|Injection|Dressing|Vaccination|Deworming|Medication|Consultation|Procedure|Other
+  followUpDate                 DateTime?
+  followUpExpectedTime         String? // Morning|Afternoon|Evening|Fixed Time
+  followUpDurationOption        String? // One-time|2 days|3 days|7 days|Custom
+  followUpFrequencyOption       String? // Once daily|Twice daily|Morning and evening|Custom
+  communicationChannelOverride  String? // whatsapp|sms|email — optional override of patient's default
+  approvedCommunicationInstruction String? // the ONLY clinically-sourced free text the AI ever sees
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  finalizedAt DateTime?
+
+  documents           ClinicalDocument[]
+  communicationPayload CommunicationPayload?
+
+  @@index([tenantId, patientId, isCurrent])
+  @@index([tenantId, visitId])
+}
+
+model ClinicalDocument {
+  id             String       @id @default(cuid())
+  tenantId       String
+  clinicalNoteId String
+  clinicalNote   ClinicalNote @relation(fields: [clinicalNoteId], references: [id])
+  patientId      String
+  visitId        String
+  category       String       // lab_result | imaging | referral_letter
+  fileName       String
+  fileUrl        String       // served only through a time-limited, access-controlled route — see modules/clinical/documents.ts
+  uploadedByStaffId String
+  uploadedAt     DateTime     @default(now())
+
+  @@index([tenantId, patientId])
+}
+
+// Built server-side, exclusively from ClinicalNote.approvedCommunicationInstruction
+// and non-clinical patient/hospital fields. The Restricted AI Communication
+// Engine (services/restrictedAiEngine.ts) is only ever handed a row shaped
+// like this — it has no Prisma access to ClinicalNote at all.
+enum CommunicationPayloadStatus {
+  pending_review
+  approved
+  rejected
+  sent
+  failed
+}
+
+model CommunicationPayload {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  clinicalNoteId     String   @unique
+  clinicalNote       ClinicalNote @relation(fields: [clinicalNoteId], references: [id])
+  visitId            String
+  patientId          String
+
+  // Non-clinical fields only — this is the entire boundary enforcement.
+  patientName        String
+  guardianName        String?
+  preferredChannel    String
+  hospitalName        String
+  hospitalType        String
+  species             String?
+  approvedInstruction String
+  followUpType        String?
+  followUpDate        DateTime?
+
+  mode               String   // "automatic" | "review"
+  status             CommunicationPayloadStatus @default(pending_review)
+  generatedMessage   String?
+  approvedByStaffId  String?
+  approvedAt         DateTime?
+  rejectionReason    String?
+  sentAt             DateTime?
+
+  createdAt          DateTime @default(now())
+
+  @@index([tenantId, status])
+}
+
+// Reserved for future IHOPS Exchange (Section 21) — not exposed in V1 UI/API.
+model PatientRecordRequest {
+  id              String   @id @default(cuid())
+  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId        String
+  requestingTenantId String
+  patientId       String
+  consentStatus   String   @default("not_requested") // not_requested|pending|granted|revoked
+  createdAt       DateTime @default(now())
+}
