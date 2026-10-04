@@ -1,7 +1,5 @@
 // IHOPS — Intelligent Hospital Operation System
-// Prisma schema. Uses SQLite for zero-setup local development.
-// For production, switch datasource provider to "postgresql" and set DATABASE_URL —
-// the schema itself is Postgres-compatible (no SQLite-only features are used).
+// Prisma schema. Postgres (Neon) in both local dev and production.
 
 generator client {
   provider = "prisma-client-js"
@@ -222,6 +220,8 @@ model Patient {
   preferredChannel      PreferredChannel
   administrativeNotes   String?
   species               String?  // veterinary tenants only
+  status                PatientStatus @default(active)
+  bloodGroup            String?  // free text, validated in app code (A+, A-, ..., Unknown)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
@@ -237,6 +237,12 @@ enum VisitStatus {
   waiting
   in_consultation
   closed
+}
+
+enum PatientStatus {
+  active
+  inactive
+  deceased
 }
 
 enum FollowUpType {
@@ -262,6 +268,7 @@ model Visit {
   recurringEveryDays Int?
   recurringCount     Int?
   startedAt      DateTime     @default(now())
+  calledAt       DateTime?    // set by POST /:id/call — when staff moved this visit from waiting into consultation
   closedAt       DateTime?
 
   payment        Payment?

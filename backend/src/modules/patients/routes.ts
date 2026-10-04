@@ -520,20 +520,16 @@ router.post(
 
       // Validation rule: preferred channel must have a matching contact detail.
       if (body.preferredChannel !== "email" && !body.phone) {
-        return res
-          .status(400)
-          .json({
-            error:
-              "A phone number is required for WhatsApp/SMS as the preferred channel",
-          });
+        return res.status(400).json({
+          error:
+            "A phone number is required for WhatsApp/SMS as the preferred channel",
+        });
       }
       if (body.preferredChannel === "email" && !body.email) {
-        return res
-          .status(400)
-          .json({
-            error:
-              "An email address is required when Email is the preferred channel",
-          });
+        return res.status(400).json({
+          error:
+            "An email address is required when Email is the preferred channel",
+        });
       }
 
       const duplicates = await findPossibleDuplicates(
@@ -761,18 +757,22 @@ router.post(
           )
             .toLowerCase()
             .trim();
-          const preferredChannel = ["whatsapp", "sms", "email"].includes(
-            preferredChannelRaw,
-          )
-            ? preferredChannelRaw
+          const validChannels = ["whatsapp", "sms", "email"] as const;
+          const preferredChannel = (
+            validChannels as readonly string[]
+          ).includes(preferredChannelRaw)
+            ? (preferredChannelRaw as (typeof validChannels)[number])
             : "sms";
           const statusRaw = String(
             mapping.status ? row[mapping.status] : "active",
           )
             .toLowerCase()
             .trim();
-          const status = ["active", "inactive", "deceased"].includes(statusRaw)
-            ? statusRaw
+          const validStatuses = ["active", "inactive", "deceased"] as const;
+          const status = (validStatuses as readonly string[]).includes(
+            statusRaw,
+          )
+            ? (statusRaw as (typeof validStatuses)[number])
             : "active";
           const bloodGroupRaw = mapping.bloodGroup
             ? String(row[mapping.bloodGroup] || "")
