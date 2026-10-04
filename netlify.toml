@@ -1,0 +1,10 @@
+[build]
+  base = "frontend"
+  command = "npm ci --include=dev && npm run build"
+  publish = "dist"
+
+# Client-side routing: serve index.html for all app routes
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
