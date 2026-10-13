@@ -114,6 +114,11 @@ export default function CommunicationPage() {
                   {l.trigger.replace("_", " ")} ·{" "}
                   {new Date(l.createdAt).toLocaleString()}
                 </div>
+                {l.status === "failed" && l.failureReason && (
+                  <div className="text-xs text-alert mt-1.5 pl-9 normal-case">
+                    {l.failureReason}
+                  </div>
+                )}
               </div>
             );
           })}
