@@ -8,7 +8,7 @@ import { sendEmail } from "../../services/notificationService";
 // existing system; nothing here is reachable from or affects any tenant data.
 const router = Router();
 
-const SALES_INBOX = process.env.SALES_INBOX_EMAIL || "hello@ihops.africa";
+const SALES_INBOX = process.env.SALES_INBOX_EMAIL || "hello@ihops.com.ng";
 
 const contactSchema = z.object({
   name: z.string().min(2),
