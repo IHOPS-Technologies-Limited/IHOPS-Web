@@ -25,6 +25,12 @@ import familiesRoutes from "./modules/families/routes";
 
 export const app = express();
 
+// Render (and Netlify's proxy) put the real client IP in X-Forwarded-For.
+// Without this, req.ip is the proxy's address, so every visitor shares ONE
+// rate-limit bucket (login / password-reset throttles would lock everyone out
+// together) and express-rate-limit logs a validation error.
+app.set("trust proxy", 1);
+
 app.use(cors());
 // The `verify` callback stashes the raw request bytes on req.rawBody before
 // JSON-parsing populates req.body. This is required for the Paystack

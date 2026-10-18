@@ -16,3 +16,14 @@ export const amberButton =
 
 export const ghostButton =
   "bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 text-sm font-medium rounded-lg px-4 py-2.5 transition disabled:opacity-50";
+
+export const dangerButton =
+  "bg-red-600 hover:bg-red-700 text-white font-semibold text-sm rounded-lg px-4 py-2.5 disabled:opacity-50 transition";
+
+export const dangerGhostButton =
+  "bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-300 text-sm font-medium rounded-lg px-4 py-2.5 transition disabled:opacity-50";
+
+export const smallButton =
+  "bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 text-xs font-medium rounded-md px-2.5 py-1.5 transition disabled:opacity-50";
+
+export const darkLabel = "block text-xs font-medium text-slate-400 mb-1";

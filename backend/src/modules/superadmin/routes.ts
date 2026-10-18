@@ -2,9 +2,19 @@ import { Router } from "express";
 import { prisma } from "../../lib/prisma";
 import { requireSuperAdminAuth } from "../../middleware/auth";
 import { sendEmail } from "../../services/notificationService";
+import { writeAuditLog } from "../../middleware/audit";
+import hospitalsRouter from "./hospitals";
+import platformRouter from "./platform";
+import adminsRouter from "./admins";
 
 const router = Router();
 router.use(requireSuperAdminAuth);
+
+// Console modules (Hospitals management, platform overview/system/audit/
+// payments, Super Admin accounts). All inherit the auth guard above.
+router.use(hospitalsRouter);
+router.use(platformRouter);
+router.use(adminsRouter);
 
 // 9.6.1 Public Hospital Approval Queue
 router.get("/approvals", async (_req, res, next) => {
@@ -38,12 +48,10 @@ router.post("/approvals/:id/approve", async (req, res, next) => {
   try {
     const { reviewedDetails } = req.body;
     if (!reviewedDetails)
-      return res
-        .status(400)
-        .json({
-          error:
-            "Reviewer must confirm the application details were opened before approving",
-        });
+      return res.status(400).json({
+        error:
+          "Reviewer must confirm the application details were opened before approving",
+      });
 
     const tenant = await prisma.tenant.update({
       where: { id: req.params.id },
@@ -57,6 +65,13 @@ router.post("/approvals/:id/approve", async (req, res, next) => {
         approvedBySuperAdminId: req.superAdmin!.id,
         approvedAt: new Date(),
       },
+    });
+    await writeAuditLog({
+      tenantId: tenant.id,
+      superAdminId: req.superAdmin!.id,
+      actionType: "superadmin.approval_approved",
+      entityType: "Tenant",
+      entityId: tenant.id,
     });
     await sendEmail(
       tenant.email,
@@ -86,6 +101,14 @@ router.post("/approvals/:id/reject", async (req, res, next) => {
         approvedBySuperAdminId: req.superAdmin!.id,
         approvedAt: new Date(),
       },
+    });
+    await writeAuditLog({
+      tenantId: tenant.id,
+      superAdminId: req.superAdmin!.id,
+      actionType: "superadmin.approval_rejected",
+      entityType: "Tenant",
+      entityId: tenant.id,
+      metadata: { reason },
     });
     await sendEmail(
       tenant.email,
@@ -164,8 +187,8 @@ router.get("/search", async (req, res, next) => {
     const tenants = await prisma.tenant.findMany({
       where: {
         OR: [
-          { hospitalName: { contains: q } },
-          { email: { contains: q } },
+          { hospitalName: { contains: q, mode: "insensitive" } },
+          { email: { contains: q, mode: "insensitive" } },
           { phone: { contains: q } },
         ],
       },
@@ -224,7 +247,34 @@ router.post("/announcements", async (req, res, next) => {
         createdBySuperAdminId: req.superAdmin!.id,
       },
     });
+    await writeAuditLog({
+      superAdminId: req.superAdmin!.id,
+      actionType: "superadmin.announcement_create",
+      entityType: "Announcement",
+      entityId: announcement.id,
+      metadata: { title, targetSegment },
+    });
     res.status(201).json({ announcement });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.delete("/announcements/:id", async (req, res, next) => {
+  try {
+    const existing = await prisma.announcement.findUnique({
+      where: { id: req.params.id },
+    });
+    if (!existing) return res.status(404).json({ error: "Not found" });
+    await prisma.announcement.delete({ where: { id: existing.id } });
+    await writeAuditLog({
+      superAdminId: req.superAdmin!.id,
+      actionType: "superadmin.announcement_delete",
+      entityType: "Announcement",
+      entityId: existing.id,
+      metadata: { title: existing.title },
+    });
+    res.json({ message: "Announcement deleted" });
   } catch (err) {
     next(err);
   }

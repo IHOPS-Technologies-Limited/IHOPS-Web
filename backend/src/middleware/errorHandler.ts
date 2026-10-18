@@ -44,17 +44,32 @@ export function errorHandler(
   console.error(err);
 
   if (isPrismaError(err)) {
+    // P2002 = unique constraint violated. This is a "that already exists"
+    // situation the user can fix, not a server fault — answer 409 with a
+    // readable message instead of the generic "database error" 500.
+    if (err.code === "P2002") {
+      const fields = Array.isArray(err.meta?.target)
+        ? (err.meta.target as string[]).filter((f) => f !== "tenantId")
+        : [];
+      return res.status(409).json({
+        error: fields.length
+          ? `That ${fields.join(" / ")} is already in use. Choose a different one.`
+          : "That record already exists.",
+      });
+    }
+    // P2025 = record required by the operation was not found.
+    if (err.code === "P2025") {
+      return res.status(404).json({ error: "The record was not found." });
+    }
     if (isMissingColumnError(err)) {
       return res.status(500).json({
         error:
           "The database is missing a column the app expects. Run `npx prisma migrate dev` in the backend folder, then restart the server.",
       });
     }
-    return res
-      .status(500)
-      .json({
-        error: "A database error occurred. Check the server logs for details.",
-      });
+    return res.status(500).json({
+      error: "A database error occurred. Check the server logs for details.",
+    });
   }
 
   const status = err.status || 500;

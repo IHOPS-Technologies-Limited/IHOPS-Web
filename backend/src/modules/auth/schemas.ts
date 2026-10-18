@@ -1,11 +1,20 @@
 import { z } from "zod";
 
+export const HOSPITAL_TYPES = [
+  "General Hospital",
+  "Private Clinic",
+  "Teaching Hospital",
+  "Dental Clinic",
+  "Veterinary Clinic",
+  "Eye Clinic",
+  "Physiotherapy Clinic",
+  "Diagnostic Centre",
+  "Specialist Clinic",
+] as const;
+
 export const signupSchema = z.object({
   hospitalName: z.string().min(2),
-  hospitalType: z.enum([
-    "General Hospital", "Private Clinic", "Teaching Hospital", "Dental Clinic",
-    "Veterinary Clinic", "Eye Clinic", "Physiotherapy Clinic", "Diagnostic Centre", "Specialist Clinic",
-  ]),
+  hospitalType: z.enum(HOSPITAL_TYPES),
   contactPerson: z.string().min(2),
   email: z.string().email(),
   phone: z.string().min(7),
@@ -29,4 +38,25 @@ export const pinLoginSchema = z.object({
   tenantEmail: z.string().email(),
   staffIdDisplay: z.string().min(1),
   pin: z.string().min(4).max(6),
+});
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().email(),
+});
+
+// bcrypt only uses the first 72 bytes of a password, so cap there rather than
+// silently ignoring the tail of a longer one.
+const newPassword = z
+  .string()
+  .min(8, "Password must be at least 8 characters")
+  .max(72, "Password must be 72 characters or fewer");
+
+export const resetPasswordSchema = z.object({
+  token: z.string().min(20).max(200),
+  newPassword,
+});
+
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword,
 });

@@ -8,7 +8,16 @@ import {
   generateVerificationToken,
   generateTempPin,
 } from "../../lib/ids";
-import { signupSchema, loginSchema, pinLoginSchema } from "./schemas";
+import {
+  signupSchema,
+  loginSchema,
+  pinLoginSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
+  changePasswordSchema,
+} from "./schemas";
+import { hashResetToken } from "../../lib/secrets";
+import { issuePasswordReset } from "../../services/passwordResetService";
 import { sendEmail } from "../../services/notificationService";
 import { writeAuditLog } from "../../middleware/audit";
 import { requireStaffAuth, allowWhenSuspended } from "../../middleware/auth";
@@ -21,6 +30,23 @@ const resendLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 1,
   keyGenerator: (req) => req.body?.email || req.ip,
+});
+
+// Password reset emails: a handful per address per 15 minutes is plenty for a
+// real person and stops the endpoint being used to spam someone's inbox.
+const forgotLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  keyGenerator: (req) => String(req.body?.email || req.ip || "").toLowerCase(),
+  message: {
+    error: "Too many reset requests. Please try again in a few minutes.",
+  },
+});
+// Guessing reset tokens / passwords: throttle per IP.
+const authAttemptLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: "Too many attempts. Please try again in a few minutes." },
 });
 
 // --- 9.1.1 / 9.1.2 Signup — Hospital Information + Plan Selection combined ---
@@ -275,11 +301,9 @@ router.post("/pin-login", async (req, res, next) => {
       return res.status(401).json({ error: "Invalid Staff ID or PIN" });
 
     if (staff.lockedUntil && staff.lockedUntil > new Date()) {
-      return res
-        .status(423)
-        .json({
-          error: "Account temporarily locked due to repeated failed attempts",
-        });
+      return res.status(423).json({
+        error: "Account temporarily locked due to repeated failed attempts",
+      });
     }
 
     const ok = await compareSecret(body.pin, staff.pinHash);
@@ -386,21 +410,159 @@ router.get(
   },
 );
 
-// --- Super Admin login (separate console, separate credential store & token secret) ---
-router.post("/super-admin/login", async (req, res, next) => {
+// --- Forgot password -------------------------------------------------------
+// Always answers with the same message whether or not the address matches an
+// account, so the endpoint can't be used to discover which emails are
+// registered. Only accounts that actually have an email+password login
+// (administrators) are eligible — PIN-only staff reset their PIN via their
+// administrator instead.
+router.post("/forgot-password", forgotLimiter, async (req, res, next) => {
+  const generic = {
+    message:
+      "If an account exists for that email, we've sent a link to reset the password.",
+  };
   try {
-    const body = loginSchema.parse(req.body);
-    const admin = await prisma.superAdmin.findUnique({
-      where: { email: body.email },
+    const { email } = forgotPasswordSchema.parse(req.body);
+    const staff = await prisma.staff.findFirst({
+      where: {
+        email: { equals: email.trim(), mode: "insensitive" },
+        passwordHash: { not: null },
+        status: "active",
+      },
     });
-    if (!admin || !(await compareSecret(body.password, admin.passwordHash))) {
-      return res.status(401).json({ error: "Invalid email or password" });
+    if (staff) {
+      await issuePasswordReset(staff);
+      await writeAuditLog({
+        tenantId: staff.tenantId,
+        staffId: staff.id,
+        actionType: "auth.password_reset_requested",
+        entityType: "Staff",
+        entityId: staff.id,
+      });
     }
-    const token = signSuperAdminToken({ superAdminId: admin.id });
-    res.json({ token, superAdmin: { id: admin.id, name: admin.name } });
+    res.json(generic);
+  } catch (err) {
+    // A malformed email is the caller's mistake and safe to report; anything
+    // else (e.g. the mail provider is down) must not change the response.
+    if ((err as any)?.name === "ZodError") return next(err);
+    console.error("[forgot-password]", err);
+    res.json(generic);
+  }
+});
+
+// --- Complete a password reset from the emailed link -----------------------
+router.post("/reset-password", authAttemptLimiter, async (req, res, next) => {
+  try {
+    const { token, newPassword } = resetPasswordSchema.parse(req.body);
+    const staff = await prisma.staff.findFirst({
+      where: {
+        passwordResetTokenHash: hashResetToken(token),
+        passwordResetExpires: { gt: new Date() },
+      },
+    });
+    if (!staff) {
+      return res.status(400).json({
+        error:
+          "This reset link is invalid or has expired. Request a new one from the sign-in page.",
+      });
+    }
+    await prisma.staff.update({
+      where: { id: staff.id },
+      data: {
+        passwordHash: await hashSecret(newPassword),
+        // One-time use: burn the token the moment it succeeds.
+        passwordResetTokenHash: null,
+        passwordResetExpires: null,
+      },
+    });
+    await writeAuditLog({
+      tenantId: staff.tenantId,
+      staffId: staff.id,
+      actionType: "auth.password_reset_completed",
+      entityType: "Staff",
+      entityId: staff.id,
+    });
+    if (staff.email) {
+      // Security notice — lets the real owner react if it wasn't them.
+      sendEmail(
+        staff.email,
+        "Your IHOPS password was changed",
+        `Hello ${staff.name},\n\nThe password for your IHOPS account was just changed. If that was you, there's nothing more to do.\n\nIf it wasn't you, reset your password again right away from the sign-in page and contact IHOPS support.\n\nThe IHOPS Team`,
+      ).catch((e) => console.error("[reset-password] notice failed", e));
+    }
+    res.json({ message: "Password updated. You can now sign in." });
   } catch (err) {
     next(err);
   }
 });
+
+// --- Signed-in administrator changes their own password --------------------
+router.post(
+  "/change-password",
+  requireStaffAuth,
+  allowWhenSuspended,
+  authAttemptLimiter,
+  async (req, res, next) => {
+    try {
+      const { currentPassword, newPassword } = changePasswordSchema.parse(
+        req.body,
+      );
+      const staff = await prisma.staff.findUnique({
+        where: { id: req.staff!.id },
+      });
+      if (
+        !staff?.passwordHash ||
+        !(await compareSecret(currentPassword, staff.passwordHash))
+      ) {
+        return res
+          .status(400)
+          .json({ error: "Your current password is incorrect" });
+      }
+      if (currentPassword === newPassword)
+        return res
+          .status(400)
+          .json({ error: "Choose a password different from your current one" });
+      await prisma.staff.update({
+        where: { id: staff.id },
+        data: {
+          passwordHash: await hashSecret(newPassword),
+          passwordResetTokenHash: null,
+          passwordResetExpires: null,
+        },
+      });
+      await writeAuditLog({
+        tenantId: staff.tenantId,
+        staffId: staff.id,
+        actionType: "auth.password_changed",
+        entityType: "Staff",
+        entityId: staff.id,
+      });
+      res.json({ message: "Password updated" });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// --- Super Admin login (separate console, separate credential store & token secret) ---
+router.post(
+  "/super-admin/login",
+  authAttemptLimiter,
+  async (req, res, next) => {
+    try {
+      const body = loginSchema.parse(req.body);
+      const admin = await prisma.superAdmin.findUnique({
+        where: { email: body.email },
+      });
+      if (!admin || !(await compareSecret(body.password, admin.passwordHash))) {
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
+      const token = signSuperAdminToken({ superAdminId: admin.id });
+      res.json({ token, superAdmin: { id: admin.id, name: admin.name } });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 export default router;

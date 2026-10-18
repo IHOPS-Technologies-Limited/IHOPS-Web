@@ -27,6 +27,16 @@
 
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
+import {
+  tenantRecordCounts,
+  tenantDeletionWarnings,
+  deleteTenantCascade,
+} from "../src/services/tenantAdminService";
+
+// NOTE: the same operation is available (with a typed-name confirmation) in
+// the IHOPS Internal console → Hospitals → <hospital> → Danger zone. This
+// script remains as a break-glass option and shares the same implementation
+// (src/services/tenantAdminService.ts), so the two can never drift apart.
 
 const prisma = new PrismaClient();
 
@@ -53,79 +63,37 @@ async function main() {
 
   const tenant = await prisma.tenant.findFirst({ where: { email } });
   if (!tenant) throw new Error(`No hospital found with email ${email}`);
-  const tenantId = tenant.id;
 
-  // Row counts per table, for the preview and the paying-customer guard.
-  const counts = {
-    "Clinical communication payloads": await prisma.communicationPayload.count({ where: { tenantId } }),
-    "Clinical documents": await prisma.clinicalDocument.count({ where: { tenantId } }),
-    "Clinical notes": await prisma.clinicalNote.count({ where: { tenantId } }),
-    "Communication logs": await prisma.communicationLog.count({ where: { tenantId } }),
-    Payments: await prisma.payment.count({ where: { tenantId } }),
-    Visits: await prisma.visit.count({ where: { tenantId } }),
-    Patients: await prisma.patient.count({ where: { tenantId } }),
-    Families: await prisma.family.count({ where: { tenantId } }),
-    Attendance: await prisma.attendance.count({ where: { tenantId } }),
-    Expenses: await prisma.expense.count({ where: { tenantId } }),
-    "Support tickets": await prisma.supportTicket.count({ where: { tenantId } }),
-    "Patient record requests": await prisma.patientRecordRequest.count({ where: { tenantId } }),
-    "Audit log entries": await prisma.auditLog.count({ where: { tenantId } }),
-    "SMS wallet transactions": await prisma.smsWalletTransaction.count({ where: { wallet: { tenantId } } }),
-    Staff: await prisma.staff.count({ where: { tenantId } }),
-    Departments: await prisma.department.count({ where: { tenantId } }),
-  };
-  const subscription = await prisma.subscription.findUnique({ where: { tenantId } });
-  const subscriptionPayments = subscription
-    ? await prisma.paymentHistory.count({ where: { subscriptionId: subscription.id } })
-    : 0;
-  const wallet = await prisma.smsWallet.findUnique({ where: { tenantId } });
+  const { counts, subscriptionPayments, smsWalletBalance } =
+    await tenantRecordCounts(tenant.id);
+  const warnings = await tenantDeletionWarnings(tenant.id);
 
-  console.log(`\nHospital: ${tenant.hospitalName} <${tenant.email}> — status: ${tenant.status}`);
+  console.log(
+    `\nHospital: ${tenant.hospitalName} <${tenant.email}> — status: ${tenant.status}`,
+  );
   console.log("Records that will be deleted:");
-  for (const [label, n] of Object.entries(counts)) console.log(`  ${label}: ${n}`);
+  for (const c of counts) console.log(`  ${c.label}: ${c.count}`);
   console.log(`  Subscription payment records: ${subscriptionPayments}`);
-  console.log(`  SMS wallet balance: ${wallet ? wallet.balanceUnits : 0} units`);
+  console.log(`  SMS wallet balance: ${smsWalletBalance} units`);
+  for (const w of warnings) console.log(`  ! ${w}`);
 
-  if (subscriptionPayments > 0 && !force) {
+  if (warnings.length > 0 && !force) {
     throw new Error(
-      "This hospital has subscription payment history (real money). Refusing to delete. Re-run with --force if you are certain.",
+      "Refusing to delete: see the warnings above. Re-run with --force if you are certain.",
     );
   }
 
   if (!confirm) {
-    console.log("\nPreview only — nothing was deleted. Re-run with --confirm to delete.");
+    console.log(
+      "\nPreview only — nothing was deleted. Re-run with --confirm to delete.",
+    );
     return;
   }
 
-  // Dependency order: children before parents.
-  await prisma.$transaction([
-    prisma.communicationPayload.deleteMany({ where: { tenantId } }),
-    prisma.clinicalDocument.deleteMany({ where: { tenantId } }),
-    prisma.clinicalNote.deleteMany({ where: { tenantId } }),
-    prisma.communicationLog.deleteMany({ where: { tenantId } }),
-    prisma.payment.deleteMany({ where: { tenantId } }),
-    prisma.visit.deleteMany({ where: { tenantId } }),
-    prisma.patient.deleteMany({ where: { tenantId } }),
-    prisma.family.deleteMany({ where: { tenantId } }),
-    prisma.attendance.deleteMany({ where: { tenantId } }),
-    prisma.expense.deleteMany({ where: { tenantId } }),
-    prisma.supportTicketReply.deleteMany({ where: { ticket: { tenantId } } }),
-    prisma.supportTicket.deleteMany({ where: { tenantId } }),
-    prisma.patientRecordRequest.deleteMany({ where: { tenantId } }),
-    // Audit rows may reference this hospital directly or via its staff.
-    prisma.auditLog.deleteMany({
-      where: { OR: [{ tenantId }, { staff: { tenantId } }] },
-    }),
-    prisma.smsWalletTransaction.deleteMany({ where: { wallet: { tenantId } } }),
-    prisma.smsWallet.deleteMany({ where: { tenantId } }),
-    prisma.staff.deleteMany({ where: { tenantId } }),
-    prisma.department.deleteMany({ where: { tenantId } }),
-    prisma.paymentHistory.deleteMany({ where: { subscription: { tenantId } } }),
-    prisma.subscription.deleteMany({ where: { tenantId } }),
-    prisma.tenant.delete({ where: { id: tenantId } }),
-  ]);
-
-  console.log(`\nDeleted ${tenant.hospitalName} and all of its data. ${tenant.email} can now sign up again.`);
+  await deleteTenantCascade(tenant.id);
+  console.log(
+    `\nDeleted ${tenant.hospitalName} and all of its data. ${tenant.email} can now sign up again.`,
+  );
 }
 
 main()

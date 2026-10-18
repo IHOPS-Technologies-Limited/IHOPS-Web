@@ -166,6 +166,10 @@ model Staff {
   lockedUntil    DateTime?
   status         StaffStatus @default(active)
   passwordHash   String?     // administrators/staff with email login (dashboard access)
+  // Password reset: only the SHA-256 hash of the emailed token is stored, so a
+  // database leak never exposes a usable reset link. Cleared once used.
+  passwordResetTokenHash String?
+  passwordResetExpires   DateTime?
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 
@@ -177,6 +181,7 @@ model Staff {
 
   @@unique([tenantId, staffIdDisplay])
   @@unique([tenantId, email])
+  @@index([passwordResetTokenHash])
 }
 
 // ---------------------------------------------------------------------------
@@ -510,6 +515,10 @@ model AuditLog {
   tenantId   String?
   staff      Staff?   @relation(fields: [staffId], references: [id])
   staffId    String?
+  // Set when the action was performed from the IHOPS Internal (Super Admin)
+  // console rather than by a hospital staff member. Deliberately NOT a foreign
+  // key so the trail survives a Super Admin account being removed.
+  superAdminId String?
   actionType String   // e.g. "visit.close", "expense.create", "staff.pin_reset"
   entityType String
   entityId   String?
@@ -517,6 +526,8 @@ model AuditLog {
   createdAt  DateTime @default(now())
 
   @@index([tenantId, createdAt])
+  @@index([createdAt])
+  @@index([superAdminId, createdAt])
 }
 
 // ---------------------------------------------------------------------------

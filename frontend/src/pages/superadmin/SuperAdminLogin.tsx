@@ -22,7 +22,7 @@ export default function SuperAdminLogin() {
       });
       localStorage.setItem("ihops_superadmin_token", res.token);
       localStorage.setItem("ihops_superadmin_name", res.superAdmin.name);
-      nav("/internal/approvals");
+      nav("/internal/overview");
     } catch (e: any) {
       setError(e.message);
     } finally {

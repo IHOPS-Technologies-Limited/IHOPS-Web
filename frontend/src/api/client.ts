@@ -56,6 +56,17 @@ export const superAdminApi = {
     request(path, { method: "POST", body: JSON.stringify(body) }, true),
   patch: (path: string, body?: any) =>
     request(path, { method: "PATCH", body: JSON.stringify(body) }, true),
+  // DELETE with an optional JSON body — destructive endpoints (delete
+  // hospital / staff) take a typed confirmation that the server re-checks.
+  del: (path: string, body?: any) =>
+    request(
+      path,
+      {
+        method: "DELETE",
+        body: body === undefined ? undefined : JSON.stringify(body),
+      },
+      true,
+    ),
 };
 
 export function downloadFile(path: string, filename: string) {

@@ -15,6 +15,8 @@ import Signup from "./pages/onboarding/Signup";
 import CheckEmail from "./pages/onboarding/CheckEmail";
 import VerifyEmail from "./pages/onboarding/VerifyEmail";
 import Login from "./pages/onboarding/Login";
+import ForgotPassword from "./pages/onboarding/ForgotPassword";
+import ResetPassword from "./pages/onboarding/ResetPassword";
 import ChangePin from "./pages/onboarding/ChangePin";
 import AccountRestricted from "./pages/onboarding/AccountRestricted";
 import SetupWizard from "./pages/onboarding/SetupWizard";
@@ -42,6 +44,12 @@ import TenantMonitoring from "./pages/superadmin/TenantMonitoring";
 import Analytics from "./pages/superadmin/Analytics";
 import Announcements from "./pages/superadmin/Announcements";
 import SupportRequests from "./pages/superadmin/SupportRequests";
+import Overview from "./pages/superadmin/Overview";
+import HospitalDetail from "./pages/superadmin/HospitalDetail";
+import Payments from "./pages/superadmin/Payments";
+import AuditLog from "./pages/superadmin/AuditLog";
+import SystemStatus from "./pages/superadmin/SystemStatus";
+import Team from "./pages/superadmin/Team";
 
 export default function App() {
   return (
@@ -58,6 +66,8 @@ export default function App() {
           <Route path="/check-email" element={<CheckEmail />} />
           <Route path="/verify-email" element={<VerifyEmail />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/change-pin" element={<ChangePin />} />
           <Route path="/setup" element={<SetupWizard />} />
           <Route path="/account-restricted" element={<AccountRestricted />} />
@@ -84,9 +94,20 @@ export default function App() {
 
           <Route path="/internal/login" element={<SuperAdminLogin />} />
           <Route path="/internal" element={<SuperAdminLayout />}>
-            <Route index element={<Navigate to="approvals" replace />} />
+            <Route index element={<Navigate to="overview" replace />} />
+            <Route path="overview" element={<Overview />} />
             <Route path="approvals" element={<ApprovalQueue />} />
-            <Route path="tenants" element={<TenantMonitoring />} />
+            <Route path="hospitals" element={<TenantMonitoring />} />
+            <Route path="hospitals/:id" element={<HospitalDetail />} />
+            {/* old "Subscriptions" URL */}
+            <Route
+              path="tenants"
+              element={<Navigate to="/internal/hospitals" replace />}
+            />
+            <Route path="payments" element={<Payments />} />
+            <Route path="audit" element={<AuditLog />} />
+            <Route path="system" element={<SystemStatus />} />
+            <Route path="team" element={<Team />} />
             <Route path="analytics" element={<Analytics />} />
             <Route path="announcements" element={<Announcements />} />
             <Route path="support" element={<SupportRequests />} />

@@ -11,15 +11,25 @@ import {
   Bell,
   Mail,
   ChevronDown,
+  LayoutDashboard,
+  CreditCard,
+  ScrollText,
+  Server,
+  Users,
 } from "lucide-react";
 import { getSuperAdminToken, superAdminApi } from "../api/client";
 
 const NAV = [
+  { to: "/internal/overview", label: "Overview", icon: LayoutDashboard },
   { to: "/internal/approvals", label: "Approval Queue", icon: ClipboardCheck },
-  { to: "/internal/tenants", label: "Subscriptions", icon: Building2 },
+  { to: "/internal/hospitals", label: "Hospitals", icon: Building2 },
+  { to: "/internal/payments", label: "Payments", icon: CreditCard },
   { to: "/internal/analytics", label: "Analytics", icon: BarChart3 },
   { to: "/internal/announcements", label: "Announcements", icon: Megaphone },
   { to: "/internal/support", label: "Support Requests", icon: LifeBuoy },
+  { to: "/internal/audit", label: "Audit Log", icon: ScrollText },
+  { to: "/internal/system", label: "System", icon: Server },
+  { to: "/internal/team", label: "Team", icon: Users },
 ];
 
 export default function SuperAdminLayout() {
@@ -77,7 +87,7 @@ export default function SuperAdminLayout() {
           </div>
         </div>
 
-        <nav className="flex-1 px-3 py-4 space-y-1">
+        <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
           {NAV.map((item) => (
             <NavLink
               key={item.to}
@@ -174,6 +184,27 @@ export default function SuperAdminLayout() {
             )}
           </div>
         </header>
+
+        {/* The sidebar is hidden below md, so give small screens a scrollable
+            tab strip — otherwise the console had no navigation on a phone. */}
+        <nav className="md:hidden flex gap-1 overflow-x-auto px-3 py-2 border-b border-white/5 bg-[#070D18]">
+          {NAV.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                `flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap ${
+                  isActive
+                    ? "bg-amber-500 text-slate-950"
+                    : "text-slate-300 bg-white/5"
+                }`
+              }
+            >
+              <item.icon size={13} />
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
 
         <main className="flex-1 p-4 md:p-8">
           <Outlet />

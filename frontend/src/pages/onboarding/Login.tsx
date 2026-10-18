@@ -96,6 +96,14 @@ export default function Login() {
                 onKeyDown={(e) => e.key === "Enter" && submitPassword()}
               />
             </div>
+            <div className="text-right -mt-1">
+              <Link
+                to="/forgot-password"
+                className="text-xs text-teal-700 font-medium hover:underline"
+              >
+                Forgot password?
+              </Link>
+            </div>
             <button
               className="btn-primary w-full"
               disabled={loading}
@@ -106,6 +114,9 @@ export default function Login() {
           </div>
         ) : (
           <div className="space-y-3">
+            <p className="text-xs text-teal-900/50 -mt-1">
+              Forgot your PIN? Ask your hospital administrator to reset it.
+            </p>
             <div>
               <label className="label">Hospital email</label>
               <input

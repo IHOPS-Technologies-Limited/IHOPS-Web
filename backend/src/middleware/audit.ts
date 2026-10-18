@@ -6,10 +6,14 @@ import { prisma } from "../lib/prisma";
  * from within route handlers after a successful mutation — it's deliberately
  * explicit rather than fully automatic so each entry carries a meaningful
  * actionType/entityType instead of a generic "POST /x" line.
+ *
+ * `superAdminId` marks an action performed from the IHOPS Internal console.
+ * Those rows are what the Super Admin "Audit Log" screen filters on.
  */
 export async function writeAuditLog(params: {
   tenantId?: string | null;
   staffId?: string | null;
+  superAdminId?: string | null;
   actionType: string;
   entityType: string;
   entityId?: string | null;
@@ -19,6 +23,7 @@ export async function writeAuditLog(params: {
     data: {
       tenantId: params.tenantId ?? null,
       staffId: params.staffId ?? null,
+      superAdminId: params.superAdminId ?? null,
       actionType: params.actionType,
       entityType: params.entityType,
       entityId: params.entityId ?? null,

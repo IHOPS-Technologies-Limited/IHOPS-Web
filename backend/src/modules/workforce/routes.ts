@@ -3,7 +3,8 @@ import * as XLSX from "xlsx";
 import { prisma } from "../../lib/prisma";
 import { requireStaffAuth, requirePermission } from "../../middleware/auth";
 import { writeAuditLog } from "../../middleware/audit";
-import { generateStaffId, generateTempPin } from "../../lib/ids";
+import { generateTempPin } from "../../lib/ids";
+import { nextStaffIdDisplay, blankToNull } from "../../services/staffService";
 import { hashSecret, compareSecret } from "../../lib/hash";
 import { sendSms, sendEmail } from "../../services/notificationService";
 
@@ -45,16 +46,18 @@ router.post(
   requirePermission("staff.manage"),
   async (req, res, next) => {
     try {
-      const { name, role, email, phone, departmentId } = req.body;
-      const count = await prisma.staff.count({
-        where: { tenantId: req.tenantId! },
-      });
+      const { name, role } = req.body;
+      const email = blankToNull(req.body.email);
+      const phone = blankToNull(req.body.phone);
+      const departmentId = blankToNull(req.body.departmentId);
+      if (!name || !role)
+        return res.status(400).json({ error: "Name and role are required" });
       const pin = generateTempPin();
       const pinHash = await hashSecret(pin);
       const staff = await prisma.staff.create({
         data: {
           tenantId: req.tenantId!,
-          staffIdDisplay: generateStaffId(count + 1),
+          staffIdDisplay: await nextStaffIdDisplay(req.tenantId!),
           name,
           role,
           email,
@@ -83,11 +86,9 @@ router.post(
         entityType: "Staff",
         entityId: staff.id,
       });
-      res
-        .status(201)
-        .json({
-          staff: { id: staff.id, staffIdDisplay: staff.staffIdDisplay },
-        });
+      res.status(201).json({
+        staff: { id: staff.id, staffIdDisplay: staff.staffIdDisplay },
+      });
     } catch (err) {
       next(err);
     }
