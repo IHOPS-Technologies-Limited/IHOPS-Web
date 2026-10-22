@@ -70,7 +70,13 @@ router.get(
           status: { in: ["trialing", "active", "grace_period"] },
           createdAt: { lt: d1 },
         },
-        select: { id: true, hospitalName: true, email: true, createdAt: true, status: true },
+        select: {
+          id: true,
+          hospitalName: true,
+          email: true,
+          createdAt: true,
+          status: true,
+        },
         orderBy: { createdAt: "asc" },
         take: 20,
       }),
@@ -89,17 +95,32 @@ router.get(
       prisma.tenant.count({ where: { status: "suspended" } }),
       prisma.supportTicket.count({ where: { status: { not: "resolved" } } }),
       prisma.tenant.count({ where: { status: "pending_approval" } }),
-      prisma.paymentHistory.aggregate({ where: { status: "success" }, _sum: { amount: true }, _count: { _all: true } }),
+      prisma.paymentHistory.aggregate({
+        where: { status: "success" },
+        _sum: { amount: true },
+        _count: { _all: true },
+      }),
       prisma.paymentHistory.aggregate({
         where: { status: "success", paidAt: { gte: d30 } },
         _sum: { amount: true },
         _count: { _all: true },
       }),
-      prisma.paymentHistory.count({ where: { status: "failed", paidAt: { gte: d30 } } }),
-      prisma.smsWallet.aggregate({ _sum: { balanceUnits: true }, _count: { _all: true } }),
+      prisma.paymentHistory.count({
+        where: { status: "failed", paidAt: { gte: d30 } },
+      }),
+      prisma.smsWallet.aggregate({
+        _sum: { balanceUnits: true },
+        _count: { _all: true },
+      }),
       prisma.smsWallet.findMany({
-        where: { balanceUnits: { lt: 20 }, tenant: { status: { in: ["active", "trialing", "grace_period"] } } },
-        select: { balanceUnits: true, tenant: { select: { id: true, hospitalName: true } } },
+        where: {
+          balanceUnits: { lt: 20 },
+          tenant: { status: { in: ["active", "trialing", "grace_period"] } },
+        },
+        select: {
+          balanceUnits: true,
+          tenant: { select: { id: true, hospitalName: true } },
+        },
         orderBy: { balanceUnits: "asc" },
         take: 15,
       }),
@@ -158,31 +179,40 @@ router.get(
 // SYSTEM — configuration & health, the things you'd otherwise check in Render
 // ---------------------------------------------------------------------------
 
-const isSet = (name: string) => !!(process.env[name] && process.env[name]!.trim() !== "");
+const isSet = (name: string) =>
+  !!(process.env[name] && process.env[name]!.trim() !== "");
 const flag = (name: string) => process.env[name] === "true";
 
 router.get(
   "/system",
   h(async (_req, res) => {
     // Database round-trip.
-    let db: { ok: boolean; latencyMs: number | null; error?: string } = { ok: false, latencyMs: null };
+    let db: { ok: boolean; latencyMs: number | null; error?: string } = {
+      ok: false,
+      latencyMs: null,
+    };
     const t0 = Date.now();
     try {
       await prisma.$queryRaw`SELECT 1`;
       db = { ok: true, latencyMs: Date.now() - t0 };
     } catch (e: any) {
-      db = { ok: false, latencyMs: null, error: String(e?.message || e).slice(0, 200) };
+      db = {
+        ok: false,
+        latencyMs: null,
+        error: String(e?.message || e).slice(0, 200),
+      };
     }
 
-    const [tenants, staff, patients, visits, comms, audit, superAdmins] = await Promise.all([
-      prisma.tenant.count(),
-      prisma.staff.count(),
-      prisma.patient.count(),
-      prisma.visit.count(),
-      prisma.communicationLog.count(),
-      prisma.auditLog.count(),
-      prisma.superAdmin.count(),
-    ]).catch(() => [0, 0, 0, 0, 0, 0, 0]);
+    const [tenants, staff, patients, visits, comms, audit, superAdmins] =
+      await Promise.all([
+        prisma.tenant.count(),
+        prisma.staff.count(),
+        prisma.patient.count(),
+        prisma.visit.count(),
+        prisma.communicationLog.count(),
+        prisma.auditLog.count(),
+        prisma.superAdmin.count(),
+      ]).catch(() => [0, 0, 0, 0, 0, 0, 0]);
 
     const paystackKey = process.env.PAYSTACK_SECRET_KEY || "";
     const planVars = [
@@ -208,32 +238,66 @@ router.get(
         // "live" = switched on AND fully configured; "misconfigured" = switched
         // on but missing credentials (sends will fail); "mock" = switched off,
         // messages are only logged.
-        state: enabled ? (missing.length === 0 ? "live" : "misconfigured") : "mock",
+        state: enabled
+          ? missing.length === 0
+            ? "live"
+            : "misconfigured"
+          : "mock",
         missing: enabled ? missing : [],
         details,
       };
     };
 
     const integrations = [
-      integration("email", "Email (Resend)", flag("EMAIL_PROVIDER_ENABLED"), ["RESEND_API_KEY", "RESEND_FROM"], {
-        from: process.env.RESEND_FROM || null,
-      }),
+      integration(
+        "email",
+        "Email (Resend)",
+        flag("EMAIL_PROVIDER_ENABLED"),
+        ["RESEND_API_KEY", "RESEND_FROM"],
+        {
+          from: process.env.RESEND_FROM || null,
+        },
+      ),
       integration(
         "sms",
         `SMS (${smsProvider})`,
         flag("SMS_PROVIDER_ENABLED"),
-        ["SMS_API_KEY", ...(smsProvider === "africastalking" ? ["AFRICASTALKING_USERNAME"] : [])],
+        [
+          "SMS_API_KEY",
+          ...(smsProvider === "africastalking"
+            ? ["AFRICASTALKING_USERNAME"]
+            : []),
+        ],
         { provider: smsProvider, senderId: process.env.SMS_SENDER_ID || null },
       ),
-      integration("whatsapp", "WhatsApp Business", flag("WHATSAPP_PROVIDER_ENABLED"), [
-        "WHATSAPP_ACCESS_TOKEN",
-        "WHATSAPP_PHONE_NUMBER_ID",
-      ]),
-      integration("paystack", "Paystack payments", flag("PAYSTACK_ENABLED"), ["PAYSTACK_SECRET_KEY", ...planVars], {
-        keyMode: paystackKey.startsWith("sk_live") ? "live" : paystackKey.startsWith("sk_test") ? "test" : paystackKey ? "unrecognised" : "not set",
-        planCodesConfigured: planVars.filter(isSet).length + " of 4",
-      }),
-      integration("ai", "AI reminders (Claude)", flag("AI_REMINDERS_PROVIDER_ENABLED"), ["ANTHROPIC_API_KEY"]),
+      integration(
+        "whatsapp",
+        "WhatsApp Business",
+        flag("WHATSAPP_PROVIDER_ENABLED"),
+        ["WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID"],
+      ),
+      integration(
+        "paystack",
+        "Paystack payments",
+        flag("PAYSTACK_ENABLED"),
+        ["PAYSTACK_SECRET_KEY", ...planVars],
+        {
+          keyMode: paystackKey.startsWith("sk_live")
+            ? "live"
+            : paystackKey.startsWith("sk_test")
+              ? "test"
+              : paystackKey
+                ? "unrecognised"
+                : "not set",
+          planCodesConfigured: planVars.filter(isSet).length + " of 4",
+        },
+      ),
+      integration(
+        "ai",
+        "AI reminders (Claude)",
+        flag("AI_REMINDERS_PROVIDER_ENABLED"),
+        ["ANTHROPIC_API_KEY"],
+      ),
     ];
 
     const baseUrl = process.env.APP_BASE_URL || "";
@@ -245,7 +309,9 @@ router.get(
       },
       {
         label: "Super Admin JWT secret is set and different",
-        ok: isSet("SUPER_ADMIN_JWT_SECRET") && process.env.SUPER_ADMIN_JWT_SECRET !== process.env.JWT_SECRET,
+        ok:
+          isSet("SUPER_ADMIN_JWT_SECRET") &&
+          process.env.SUPER_ADMIN_JWT_SECRET !== process.env.JWT_SECRET,
         hint: "The two secrets must differ — that's what keeps tenant tokens out of this console.",
       },
       {
@@ -265,6 +331,89 @@ router.get(
       },
     ];
 
+    // SMS cost tracking (SmsSendLog): what messaging really cost in the
+    // last 30 days vs the units billed to hospitals.
+    const since = new Date(Date.now() - 30 * DAY);
+    const window = { createdAt: { gte: since } };
+    const [byPurpose, costed, multiPage, unicodeMsgs, latestBal, recentSms] =
+      await Promise.all([
+        prisma.smsSendLog.groupBy({
+          by: ["purpose"],
+          where: window,
+          _count: { _all: true },
+          _sum: { pages: true, unitsBilled: true, costNaira: true },
+        }),
+        prisma.smsSendLog.aggregate({
+          where: { ...window, costNaira: { not: null } },
+          _sum: { pages: true, costNaira: true },
+        }),
+        prisma.smsSendLog.count({ where: { ...window, pages: { gt: 1 } } }),
+        prisma.smsSendLog.count({ where: { ...window, encoding: "unicode" } }),
+        prisma.smsSendLog.findFirst({
+          where: { providerBalanceAfter: { not: null } },
+          orderBy: { createdAt: "desc" },
+          select: { providerBalanceAfter: true, createdAt: true },
+        }),
+        prisma.smsSendLog.findMany({
+          orderBy: { createdAt: "desc" },
+          take: 15,
+        }),
+      ]).catch(
+        () => [[], { _sum: { pages: 0, costNaira: 0 } }, 0, 0, null, []] as any,
+      );
+    const tenantNames = new Map<string, string>();
+    const smsTenantIds = [
+      ...new Set((recentSms as any[]).map((r) => r.tenantId).filter(Boolean)),
+    ] as string[];
+    if (smsTenantIds.length) {
+      const ts = await prisma.tenant.findMany({
+        where: { id: { in: smsTenantIds } },
+        select: { id: true, hospitalName: true },
+      });
+      ts.forEach((t) => tenantNames.set(t.id, t.hospitalName));
+    }
+    const purposeStats = (purpose: string) => {
+      const g = (byPurpose as any[]).find((x) => x.purpose === purpose);
+      return {
+        messages: g?._count._all ?? 0,
+        pages: g?._sum.pages ?? 0,
+        unitsBilled: g?._sum.unitsBilled ?? 0,
+        costNaira: Math.round((g?._sum.costNaira ?? 0) * 100) / 100,
+      };
+    };
+    const costedPages = (costed as any)._sum.pages ?? 0;
+    const smsCosts = {
+      windowDays: 30,
+      patient: purposeStats("patient"),
+      internal: purposeStats("internal"),
+      multiPageMessages: multiPage as number,
+      unicodeMessages: unicodeMsgs as number,
+      avgCostPerPage:
+        costedPages > 0
+          ? Math.round(
+              (((costed as any)._sum.costNaira ?? 0) / costedPages) * 100,
+            ) / 100
+          : null,
+      latestProviderBalance: (latestBal as any)?.providerBalanceAfter ?? null,
+      latestBalanceAt: (latestBal as any)?.createdAt ?? null,
+      recent: (recentSms as any[]).map((r) => ({
+        id: r.id,
+        createdAt: r.createdAt,
+        purpose: r.purpose,
+        hospital: r.tenantId
+          ? (tenantNames.get(r.tenantId) ?? "Deleted hospital")
+          : null,
+        to: r.toMasked,
+        characters: r.characters,
+        encoding: r.encoding,
+        pages: r.pages,
+        unitsBilled: r.unitsBilled,
+        ok: r.ok,
+        costNaira: r.costNaira,
+        error: r.error,
+      })),
+    };
+
     const mem = process.memoryUsage();
     res.json({
       server: {
@@ -273,16 +422,28 @@ router.get(
         nodeVersion: process.version,
         platform: `${os.type()} ${os.release()}`,
         environment: process.env.NODE_ENV || "development",
-        memoryMb: { rss: Math.round(mem.rss / 1048576), heapUsed: Math.round(mem.heapUsed / 1048576) },
+        memoryMb: {
+          rss: Math.round(mem.rss / 1048576),
+          heapUsed: Math.round(mem.heapUsed / 1048576),
+        },
         appBaseUrl: baseUrl || null,
         serverTime: new Date(),
       },
       database: {
         ...db,
         provider: "PostgreSQL (Neon)",
-        rows: { tenants, staff, patients, visits, communicationLogs: comms, auditLogs: audit, superAdmins },
+        rows: {
+          tenants,
+          staff,
+          patients,
+          visits,
+          communicationLogs: comms,
+          auditLogs: audit,
+          superAdmins,
+        },
       },
       integrations,
+      smsCosts,
       business: {
         trialLengthDays: Number(process.env.TRIAL_LENGTH_DAYS || 7),
         gracePeriodDays: Number(process.env.GRACE_PERIOD_DAYS || 5),
@@ -335,10 +496,17 @@ router.post(
 router.post(
   "/system/run-sweep",
   h(async (req, res) => {
-    const before = await prisma.tenant.groupBy({ by: ["status"], _count: { _all: true } });
+    const before = await prisma.tenant.groupBy({
+      by: ["status"],
+      _count: { _all: true },
+    });
     await runTrialAndGraceSweep();
-    const after = await prisma.tenant.groupBy({ by: ["status"], _count: { _all: true } });
-    const toMap = (g: typeof before) => Object.fromEntries(g.map((x) => [x.status, x._count._all]));
+    const after = await prisma.tenant.groupBy({
+      by: ["status"],
+      _count: { _all: true },
+    });
+    const toMap = (g: typeof before) =>
+      Object.fromEntries(g.map((x) => [x.status, x._count._all]));
     const b = toMap(before);
     const a = toMap(after);
     const changes = Object.keys({ ...b, ...a })
@@ -366,7 +534,10 @@ router.post(
 router.get(
   "/audit-logs",
   h(async (req, res) => {
-    const limit = Math.min(Math.max(parseInt(String(req.query.limit || "50"), 10) || 50, 1), 100);
+    const limit = Math.min(
+      Math.max(parseInt(String(req.query.limit || "50"), 10) || 50, 1),
+      100,
+    );
     const cursor = String(req.query.cursor || "");
     const scope = String(req.query.scope || "all"); // all | internal | hospital
     const tenantId = String(req.query.tenantId || "");
@@ -376,7 +547,8 @@ router.get(
     if (scope === "internal") where.superAdminId = { not: null };
     if (scope === "hospital") where.superAdminId = null;
     if (tenantId) where.tenantId = tenantId;
-    if (actionType) where.actionType = { contains: actionType, mode: "insensitive" };
+    if (actionType)
+      where.actionType = { contains: actionType, mode: "insensitive" };
 
     const rows = await prisma.auditLog.findMany({
       where,
@@ -391,9 +563,14 @@ router.get(
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
 
-    const adminIds = [...new Set(page.map((r) => r.superAdminId).filter(Boolean))] as string[];
+    const adminIds = [
+      ...new Set(page.map((r) => r.superAdminId).filter(Boolean)),
+    ] as string[];
     const admins = adminIds.length
-      ? await prisma.superAdmin.findMany({ where: { id: { in: adminIds } }, select: { id: true, name: true } })
+      ? await prisma.superAdmin.findMany({
+          where: { id: { in: adminIds } },
+          select: { id: true, name: true },
+        })
       : [];
     const adminName = new Map(admins.map((a) => [a.id, a.name]));
 
@@ -436,13 +613,23 @@ router.get(
 router.get(
   "/payments",
   h(async (req, res) => {
-    const limit = Math.min(Math.max(parseInt(String(req.query.limit || "100"), 10) || 100, 1), 300);
+    const limit = Math.min(
+      Math.max(parseInt(String(req.query.limit || "100"), 10) || 100, 1),
+      300,
+    );
     const status = String(req.query.status || "");
     const rows = await prisma.paymentHistory.findMany({
       where: status ? { status } : {},
       orderBy: { paidAt: "desc" },
       take: limit,
-      include: { subscription: { select: { planCode: true, tenant: { select: { id: true, hospitalName: true } } } } },
+      include: {
+        subscription: {
+          select: {
+            planCode: true,
+            tenant: { select: { id: true, hospitalName: true } },
+          },
+        },
+      },
     });
     res.json({
       payments: rows.map((p) => ({

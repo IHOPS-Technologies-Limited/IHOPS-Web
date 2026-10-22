@@ -2,7 +2,7 @@
 //
 // Model: a hospital buys a fixed package of SMS "units" up front through
 // Paystack (a one-off charge, not a subscription — see initializeTopup
-// below). Every outbound SMS to a patient debits exactly 1 unit at send
+// below). Every outbound SMS to a patient debits 1 unit PER SMS PAGE at send
 // time (see debitSmsUnit, called from notificationService.sendOnChannel).
 // If the provider send then fails, the unit is refunded. A hospital with 0
 // balance simply cannot send SMS until they top up again — WhatsApp and
@@ -163,18 +163,21 @@ export async function handleTopupWebhookEvent(event: {
   ]);
 }
 
-// Atomically consumes 1 unit if (and only if) the balance is >= 1. The
-// WHERE clause on balanceUnits means two simultaneous sends can never both
-// succeed off the last unit — one of the two updateMany calls will match 0
-// rows. Returns false (no debit performed) when the wallet is empty.
+// Atomically consumes `units` (one per SMS page — see lib/smsSegments.ts) if
+// (and only if) the balance covers all of them. The WHERE clause on
+// balanceUnits means two simultaneous sends can never both succeed off the
+// last units — one of the two updateMany calls will match 0 rows. Returns
+// false (no debit performed) when the wallet can't cover it.
 export async function debitSmsUnit(
   tenantId: string,
   communicationLogId?: string,
+  units = 1,
+  detail?: string,
 ): Promise<boolean> {
   const wallet = await getOrCreateWallet(tenantId);
   const result = await prisma.smsWallet.updateMany({
-    where: { tenantId, balanceUnits: { gte: 1 } },
-    data: { balanceUnits: { decrement: 1 } },
+    where: { tenantId, balanceUnits: { gte: units } },
+    data: { balanceUnits: { decrement: units } },
   });
   if (result.count !== 1) return false;
 
@@ -182,37 +185,38 @@ export async function debitSmsUnit(
     data: {
       walletId: wallet.id,
       type: "debit",
-      units: -1,
+      units: -units,
       status: "success",
       communicationLogId,
-      description: "1 unit — patient SMS sent",
+      description: `${units} unit${units === 1 ? "" : "s"} — patient SMS${detail ? ` (${detail})` : " sent"}`,
     },
   });
   return true;
 }
 
-// Returns the unit to the wallet after a debited send fails at the
+// Returns the units to the wallet after a debited send fails at the
 // provider (Termii/Africa's Talking error) — the hospital shouldn't be
 // charged for an SMS that never actually went out.
 export async function refundSmsUnit(
   tenantId: string,
   reason: string,
   communicationLogId?: string,
+  units = 1,
 ): Promise<void> {
   const wallet = await getOrCreateWallet(tenantId);
   await prisma.$transaction([
     prisma.smsWallet.update({
       where: { id: wallet.id },
-      data: { balanceUnits: { increment: 1 } },
+      data: { balanceUnits: { increment: units } },
     }),
     prisma.smsWalletTransaction.create({
       data: {
         walletId: wallet.id,
         type: "refund",
-        units: 1,
+        units,
         status: "success",
         communicationLogId,
-        description: `1 unit refunded — ${reason}`,
+        description: `${units} unit${units === 1 ? "" : "s"} refunded — ${reason}`,
       },
     }),
   ]);

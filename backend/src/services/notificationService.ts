@@ -11,17 +11,89 @@
 //
 // SMS is additionally metered: every SMS to a patient (sent via
 // sendOnChannel, not the direct sendSms() calls used for internal
-// staff/system messages) debits 1 unit from that hospital's prepaid
-// SmsWallet. See services/smsWalletService.ts for the wallet itself and
+// staff/system messages) debits 1 unit PER SMS PAGE from that hospital's
+// prepaid SmsWallet (a 160-char message is 1 page; longer messages, or ones
+// containing characters like ₦ or curly quotes, take more — lib/smsSegments.ts).
+// Every real provider send, billed or internal, is also written to SmsSendLog
+// with the provider's reported balance so the true naira cost is visible. See services/smsWalletService.ts for the wallet itself and
 // modules/sms-wallet/routes.ts for the top-up API.
 
 import { debitSmsUnit, refundSmsUnit } from "./smsWalletService";
+import { smsSegments } from "../lib/smsSegments";
+import { recordSmsSend } from "./smsCostService";
 
-type SendResult = { ok: boolean; providerRef?: string; error?: string };
+export type SendResult = {
+  ok: boolean;
+  providerRef?: string;
+  error?: string;
+  // SMS only: what the provider reported about its own books.
+  providerBalance?: number; // account balance after this send (Termii: naira)
+  providerCost?: number; // cost of this send, when the provider states it
+};
+
+function toNumber(v: unknown): number | undefined {
+  const n =
+    typeof v === "number" ? v : typeof v === "string" ? parseFloat(v) : NaN;
+  return Number.isFinite(n) ? n : undefined;
+}
 
 const whatsappEnabled = process.env.WHATSAPP_PROVIDER_ENABLED === "true";
 const smsEnabled = process.env.SMS_PROVIDER_ENABLED === "true";
 const emailEnabled = process.env.EMAIL_PROVIDER_ENABLED === "true";
+
+// Meta's Cloud API wants the number as digits only, WITH country code and no
+// leading 0 or + (e.g. 2348031234567). Patients' numbers are usually saved the
+// Nigerian way (0803 123 4567), which Meta rejects as an invalid parameter —
+// the SMS path already normalised this, WhatsApp didn't.
+export function normalizeWhatsAppNumber(raw: string): string {
+  const cc =
+    process.env.WHATSAPP_DEFAULT_COUNTRY_CODE ||
+    process.env.SMS_DEFAULT_COUNTRY_CODE ||
+    "234";
+  let n = raw.replace(/\D/g, "");
+  if (n.startsWith("00"))
+    n = n.slice(2); // 00234… international prefix
+  else if (n.startsWith("0"))
+    n = cc + n.slice(1); // 0803… national format
+  else if (cc === "234" && /^[789]\d{9}$/.test(n)) n = cc + n; // 803… with the 0 dropped
+  return n;
+}
+
+// Turns Meta's error codes into something an administrator can act on, while
+// always keeping Meta's own wording + code so nothing is hidden.
+function whatsappErrorMessage(err: {
+  message?: string;
+  code?: number;
+  error_data?: { details?: string };
+}): string {
+  const raw = [err.message, err.error_data?.details]
+    .filter(Boolean)
+    .join(" — ");
+  const tag = `(WhatsApp error ${err.code ?? "?"}: ${raw || "request failed"})`;
+  switch (err.code) {
+    case 190:
+    case 463:
+    case 467:
+      return `WhatsApp access token is expired or invalid. Temporary tokens last only 24 hours — create a permanent System User token in Meta Business settings. ${tag}`;
+    case 131047:
+    case 131051:
+      return `Outside the 24-hour window. WhatsApp only allows free-text messages within 24 hours of the patient's last message to you; otherwise an approved message template is required. ${tag}`;
+    case 131030:
+      return `This number isn't on the allowed recipient list for your WhatsApp TEST number. Add it in Meta → WhatsApp → API Setup, or switch to a real registered number. ${tag}`;
+    case 131026:
+      return `Undeliverable — the patient's number isn't on WhatsApp, or they haven't accepted WhatsApp's latest terms. ${tag}`;
+    case 133010:
+      return `The sending phone number isn't registered with the WhatsApp Cloud API yet. ${tag}`;
+    case 10:
+    case 200:
+    case 131005:
+      return `The access token lacks permission to send WhatsApp messages (needs whatsapp_business_messaging). ${tag}`;
+    case 100:
+      return `WhatsApp rejected a parameter — usually the Phone Number ID is wrong (use the numeric ID, not the phone number) or the patient's number is malformed. ${tag}`;
+    default:
+      return tag;
+  }
+}
 
 export async function sendWhatsApp(
   to: string,
@@ -54,7 +126,7 @@ export async function sendWhatsApp(
         },
         body: JSON.stringify({
           messaging_product: "whatsapp",
-          to: to.replace(/^\+/, ""),
+          to: normalizeWhatsAppNumber(to),
           type: "text",
           text: { body },
         }),
@@ -62,14 +134,21 @@ export async function sendWhatsApp(
     );
     const result = (await response.json()) as {
       messages?: Array<{ id?: string }>;
-      error?: { message?: string };
+      error?: {
+        message?: string;
+        code?: number;
+        error_data?: { details?: string };
+      };
     };
 
     if (!response.ok) {
+      console.error(
+        "[sendWhatsApp] Meta rejected the message:",
+        JSON.stringify(result.error),
+      );
       return {
         ok: false,
-        error:
-          result.error?.message || "WhatsApp Business Cloud API request failed",
+        error: whatsappErrorMessage(result.error || {}),
       };
     }
 
@@ -83,7 +162,7 @@ export async function sendWhatsApp(
   }
 }
 
-export async function sendSms(to: string, body: string): Promise<SendResult> {
+async function sendSmsRaw(to: string, body: string): Promise<SendResult> {
   if (!smsEnabled) {
     console.log(`[MOCK SMS] to=${to} :: ${body}`);
     return { ok: true, providerRef: `mock-sms-${Date.now()}` };
@@ -148,6 +227,7 @@ export async function sendSms(to: string, body: string): Promise<SendResult> {
       let result: {
         message_id?: string;
         message?: string;
+        balance?: number | string;
       } = {};
       try {
         result = JSON.parse(responseText);
@@ -169,7 +249,11 @@ export async function sendSms(to: string, body: string): Promise<SendResult> {
           error: result.message || "Termii SMS request failed",
         };
       }
-      return { ok: true, providerRef: result.message_id };
+      return {
+        ok: true,
+        providerRef: result.message_id,
+        providerBalance: toNumber(result.balance),
+      };
     }
 
     if (provider === "africastalking") {
@@ -195,7 +279,11 @@ export async function sendSms(to: string, body: string): Promise<SendResult> {
       );
       const result = (await response.json()) as {
         SMSMessageData?: {
-          Recipients?: Array<{ messageId?: string; status?: string }>;
+          Recipients?: Array<{
+            messageId?: string;
+            status?: string;
+            cost?: string;
+          }>;
         };
         errorMessage?: string;
       };
@@ -209,7 +297,13 @@ export async function sendSms(to: string, body: string): Promise<SendResult> {
       if (recipient?.status && recipient.status !== "Success") {
         return { ok: false, error: recipient.status };
       }
-      return { ok: true, providerRef: recipient?.messageId };
+      // Africa's Talking states the cost per recipient, e.g. "NGN 4.0000".
+      const costMatch = /^NGN\s*([\d.]+)/i.exec(recipient?.cost || "");
+      return {
+        ok: true,
+        providerRef: recipient?.messageId,
+        providerCost: costMatch ? toNumber(costMatch[1]) : undefined,
+      };
     }
 
     return { ok: false, error: `Unsupported SMS_PROVIDER: ${provider}` };
@@ -217,6 +311,29 @@ export async function sendSms(to: string, body: string): Promise<SendResult> {
     console.error("[sendSms] failed:", err);
     return { ok: false, error: err.message || "Failed to send SMS" };
   }
+}
+
+// Sends one SMS and logs it (see SmsSendLog). `ctx.tenantId` + `unitsBilled`
+// are set by the billed patient path; direct callers (staff PINs, system
+// texts) get purpose "internal" — they cost real naira but are never billed to
+// a hospital wallet, which is exactly what the log makes visible.
+export async function sendSms(
+  to: string,
+  body: string,
+  ctx: { tenantId?: string; unitsBilled?: number } = {},
+): Promise<SendResult> {
+  const result = await sendSmsRaw(to, body);
+  if (smsEnabled) {
+    await recordSmsSend({
+      tenantId: ctx.tenantId ?? null,
+      purpose: ctx.tenantId ? "patient" : "internal",
+      to,
+      body,
+      unitsBilled: ctx.unitsBilled ?? 0,
+      result,
+    });
+  }
+  return result;
 }
 
 export async function sendEmail(
@@ -360,18 +477,30 @@ async function sendBilledSms(
     return sendSms(to, body);
   }
 
-  const debited = await debitSmsUnit(tenantId);
+  // Providers bill per SMS page, so the hospital is charged per page too
+  // (1 unit per page). A message over 160 characters — or any length once it
+  // contains a non-GSM character such as ₦ or a curly quote — takes 2+ pages.
+  const seg = smsSegments(body);
+  const detail = `${seg.pages} page${seg.pages === 1 ? "" : "s"}, ${seg.characters} ${seg.encoding === "gsm" ? "chars" : "chars, unicode"}`;
+  const debited = await debitSmsUnit(tenantId, undefined, seg.pages, detail);
   if (!debited) {
     return {
       ok: false,
       error:
-        "Insufficient SMS balance — top up SMS units to keep sending text messages.",
+        seg.pages > 1
+          ? `Insufficient SMS balance — this message is ${seg.pages} SMS pages and needs ${seg.pages} units. Top up SMS units or shorten the message.`
+          : "Insufficient SMS balance — top up SMS units to keep sending text messages.",
     };
   }
 
-  const result = await sendSms(to, body);
+  const result = await sendSms(to, body, { tenantId, unitsBilled: seg.pages });
   if (!result.ok) {
-    await refundSmsUnit(tenantId, result.error || "provider send failed");
+    await refundSmsUnit(
+      tenantId,
+      result.error || "provider send failed",
+      undefined,
+      seg.pages,
+    );
   }
   return result;
 }

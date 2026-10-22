@@ -15,39 +15,96 @@ export async function tenantRecordCounts(tenantId: string): Promise<{
 }> {
   const c = async (p: Promise<number>) => p;
   const entries: [string, string, Promise<number>][] = [
-    ["communicationPayloads", "Clinical communication payloads", prisma.communicationPayload.count({ where: { tenantId } })],
-    ["clinicalDocuments", "Clinical documents", prisma.clinicalDocument.count({ where: { tenantId } })],
-    ["clinicalNotes", "Clinical notes", prisma.clinicalNote.count({ where: { tenantId } })],
-    ["communicationLogs", "Communication logs", prisma.communicationLog.count({ where: { tenantId } })],
-    ["payments", "Visit payments", prisma.payment.count({ where: { tenantId } })],
+    [
+      "communicationPayloads",
+      "Clinical communication payloads",
+      prisma.communicationPayload.count({ where: { tenantId } }),
+    ],
+    [
+      "clinicalDocuments",
+      "Clinical documents",
+      prisma.clinicalDocument.count({ where: { tenantId } }),
+    ],
+    [
+      "clinicalNotes",
+      "Clinical notes",
+      prisma.clinicalNote.count({ where: { tenantId } }),
+    ],
+    [
+      "communicationLogs",
+      "Communication logs",
+      prisma.communicationLog.count({ where: { tenantId } }),
+    ],
+    [
+      "payments",
+      "Visit payments",
+      prisma.payment.count({ where: { tenantId } }),
+    ],
     ["visits", "Visits", prisma.visit.count({ where: { tenantId } })],
     ["patients", "Patients", prisma.patient.count({ where: { tenantId } })],
     ["families", "Families", prisma.family.count({ where: { tenantId } })],
-    ["attendance", "Attendance records", prisma.attendance.count({ where: { tenantId } })],
+    [
+      "attendance",
+      "Attendance records",
+      prisma.attendance.count({ where: { tenantId } }),
+    ],
     ["expenses", "Expenses", prisma.expense.count({ where: { tenantId } })],
-    ["supportTickets", "Support tickets", prisma.supportTicket.count({ where: { tenantId } })],
-    ["patientRecordRequests", "Patient record requests", prisma.patientRecordRequest.count({ where: { tenantId } })],
-    ["auditLogs", "Audit log entries", prisma.auditLog.count({ where: { tenantId } })],
-    ["smsWalletTransactions", "SMS wallet transactions", prisma.smsWalletTransaction.count({ where: { wallet: { tenantId } } })],
+    [
+      "supportTickets",
+      "Support tickets",
+      prisma.supportTicket.count({ where: { tenantId } }),
+    ],
+    [
+      "patientRecordRequests",
+      "Patient record requests",
+      prisma.patientRecordRequest.count({ where: { tenantId } }),
+    ],
+    [
+      "auditLogs",
+      "Audit log entries",
+      prisma.auditLog.count({ where: { tenantId } }),
+    ],
+    [
+      "smsWalletTransactions",
+      "SMS wallet transactions",
+      prisma.smsWalletTransaction.count({ where: { wallet: { tenantId } } }),
+    ],
     ["staff", "Staff accounts", prisma.staff.count({ where: { tenantId } })],
-    ["departments", "Departments", prisma.department.count({ where: { tenantId } })],
+    [
+      "departments",
+      "Departments",
+      prisma.department.count({ where: { tenantId } }),
+    ],
   ];
   const counts: RecordCount[] = [];
-  for (const [key, label, p] of entries) counts.push({ key, label, count: await c(p) });
+  for (const [key, label, p] of entries)
+    counts.push({ key, label, count: await c(p) });
 
-  const subscription = await prisma.subscription.findUnique({ where: { tenantId } });
+  const subscription = await prisma.subscription.findUnique({
+    where: { tenantId },
+  });
   const subscriptionPayments = subscription
-    ? await prisma.paymentHistory.count({ where: { subscriptionId: subscription.id } })
+    ? await prisma.paymentHistory.count({
+        where: { subscriptionId: subscription.id },
+      })
     : 0;
   const wallet = await prisma.smsWallet.findUnique({ where: { tenantId } });
-  return { counts, subscriptionPayments, smsWalletBalance: wallet?.balanceUnits ?? 0 };
+  return {
+    counts,
+    subscriptionPayments,
+    smsWalletBalance: wallet?.balanceUnits ?? 0,
+  };
 }
 
 // Things that make deleting a hospital more than a tidy-up. The caller must
 // pass `force` to proceed past any of them.
-export async function tenantDeletionWarnings(tenantId: string): Promise<string[]> {
+export async function tenantDeletionWarnings(
+  tenantId: string,
+): Promise<string[]> {
   const warnings: string[] = [];
-  const subscription = await prisma.subscription.findUnique({ where: { tenantId } });
+  const subscription = await prisma.subscription.findUnique({
+    where: { tenantId },
+  });
   if (subscription) {
     const paid = await prisma.paymentHistory.count({
       where: { subscriptionId: subscription.id, status: "success" },
@@ -56,14 +113,19 @@ export async function tenantDeletionWarnings(tenantId: string): Promise<string[]
       warnings.push(
         `This hospital has ${paid} successful subscription payment${paid === 1 ? "" : "s"} on record (real money). Deleting erases that payment history.`,
       );
-    if (subscription.paystackSubscriptionCode && subscription.status === "active")
+    if (
+      subscription.paystackSubscriptionCode &&
+      subscription.status === "active"
+    )
       warnings.push(
         "This hospital has an ACTIVE Paystack subscription. Deleting the account does NOT cancel it at Paystack — cancel it in the Paystack dashboard or the customer will keep being charged.",
       );
   }
   const wallet = await prisma.smsWallet.findUnique({ where: { tenantId } });
   if (wallet && wallet.balanceUnits > 0)
-    warnings.push(`There are ${wallet.balanceUnits} unused SMS units in the wallet; they will be lost.`);
+    warnings.push(
+      `There are ${wallet.balanceUnits} unused SMS units in the wallet; they will be lost.`,
+    );
   return warnings;
 }
 
@@ -92,6 +154,7 @@ export async function deleteTenantCascade(tenantId: string): Promise<void> {
       where: { OR: [{ tenantId }, { staff: { tenantId } }] },
     }),
     prisma.smsWalletTransaction.deleteMany({ where: { wallet: { tenantId } } }),
+    prisma.smsSendLog.deleteMany({ where: { tenantId } }),
     prisma.smsWallet.deleteMany({ where: { tenantId } }),
     prisma.staff.deleteMany({ where: { tenantId } }),
     prisma.department.deleteMany({ where: { tenantId } }),
@@ -115,7 +178,9 @@ export async function setTenantStatus(
       where: { id: tenantId },
       data: {
         status,
-        ...(extra.trialEndsAt !== undefined ? { trialEndsAt: extra.trialEndsAt } : {}),
+        ...(extra.trialEndsAt !== undefined
+          ? { trialEndsAt: extra.trialEndsAt }
+          : {}),
         ...(extra.gracePeriodEndsAt !== undefined
           ? { gracePeriodEndsAt: extra.gracePeriodEndsAt }
           : {}),
