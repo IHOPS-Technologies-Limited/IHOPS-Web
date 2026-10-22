@@ -714,3 +714,32 @@ model PatientRecordRequest {
   consentStatus   String   @default("not_requested") // not_requested|pending|granted|revoked
   createdAt       DateTime @default(now())
 }
+
+// One row per SMS actually handed to the provider (Termii / Africa's Talking).
+// Exists so we can see the REAL cost of messaging, which is billed per SMS page
+// in naira by the provider, separately from the "units" hospitals buy:
+//   - purpose "patient"  -> billed to a hospital wallet (unitsBilled = pages)
+//   - purpose "internal" -> staff PINs / system texts; costs us, never billed
+// costNaira is estimated from the provider's reported balance before/after
+// (exact when sends don't overlap) or taken from the provider when it reports
+// a cost. No message text is stored — only counts, and the last 4 digits of
+// the number for debugging.
+model SmsSendLog {
+  id                   String   @id @default(cuid())
+  tenantId             String?  // null = internal/system SMS. Not an FK: survives nothing, deleted with the hospital
+  purpose              String   // "patient" | "internal"
+  toMasked             String
+  characters           Int
+  encoding             String   // "gsm" | "unicode"
+  pages                Int
+  unitsBilled          Int      @default(0)
+  ok                   Boolean
+  providerRef          String?
+  providerBalanceAfter Float?
+  costNaira            Float?
+  error                String?
+  createdAt            DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([tenantId, createdAt])
+}
