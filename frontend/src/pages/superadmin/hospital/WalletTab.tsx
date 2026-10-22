@@ -16,8 +16,8 @@ export default function WalletTab({ data, reload, notify }: TabProps) {
   const [mode, setMode] = useState<"credit" | "debit">("credit");
   const [units, setUnits] = useState("");
   const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
   const w = data.smsWallet;
+  const [busy, setBusy] = useState(false);
 
   async function submit() {
     const n = parseInt(units, 10);
