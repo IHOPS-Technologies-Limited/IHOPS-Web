@@ -108,7 +108,7 @@ export default function SystemStatus() {
     <div>
       <PageHeader
         title="System"
-        sub="Server health, integrations and configuration — secret values are never shown"
+        sub="Server health, integrations and configuration"
         actions={
           <button
             className={`${ghostButton} flex items-center gap-1.5`}
@@ -141,10 +141,6 @@ export default function SystemStatus() {
               <KV label="Trial length">{data.business.trialLengthDays} days</KV>
               <KV label="Grace period">{data.business.gracePeriodDays} days</KV>
             </div>
-            <p className="text-xs text-slate-500 mt-4">
-              Render's free tier sleeps when idle — a short uptime can simply
-              mean the service just woke up.
-            </p>
           </Card>
 
           <Card title="Database">
@@ -253,9 +249,8 @@ export default function SystemStatus() {
                 </button>
               </div>
               <p className="text-xs text-slate-500 mt-2">
-                Sends your approved template to that number (uses one WhatsApp
-                message from your Meta account). Do this before real patients
-                are messaged.
+                Sends a test message using your approved template to that
+                number.
               </p>
             </div>
           </Card>
@@ -270,8 +265,8 @@ export default function SystemStatus() {
               if (total === 0)
                 return (
                   <p className="text-sm text-slate-500">
-                    No real SMS sent yet (or the SMS provider is switched off).
-                    Costs appear here once messages go out.
+                    No real SMS sent yet. Costs appear here once messages go
+                    out.
                   </p>
                 );
               return (
