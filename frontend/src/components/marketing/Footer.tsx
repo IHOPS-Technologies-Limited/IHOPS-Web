@@ -1,6 +1,29 @@
 import React from "react";
 import { Link } from "react-router-dom";
-import { Cross } from "lucide-react";
+import { Cross, Linkedin, Youtube, Facebook, Instagram } from "lucide-react";
+
+const SOCIALS = [
+  {
+    label: "LinkedIn",
+    href: "https://www.linkedin.com/company/ihops-technologies-limited/",
+    Icon: Linkedin,
+  },
+  {
+    label: "YouTube",
+    href: "https://youtube.com/@ihopsng?si=JZegX0VrfLSjvnPf",
+    Icon: Youtube,
+  },
+  {
+    label: "Facebook",
+    href: "https://www.facebook.com/share/1CNjxGnPHG/",
+    Icon: Facebook,
+  },
+  {
+    label: "Instagram",
+    href: "https://www.instagram.com/ihopsng?mdxt=MWc0M2o2cTR0Y3Z4MQ==",
+    Icon: Instagram,
+  },
+];
 
 export default function Footer() {
   return (
@@ -17,6 +40,21 @@ export default function Footer() {
             Intelligent Hospital Operation System (IHOPS) <br></br>Smarter
             Hospital Operations. <br></br>Better Patient Care.
           </p>
+          <div className="flex items-center gap-3 mt-5">
+            {SOCIALS.map(({ label, href, Icon }) => (
+              <a
+                key={label}
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`IHOPS on ${label}`}
+                title={label}
+                className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center text-white/70 hover:bg-white/20 hover:text-brand-mint transition"
+              >
+                <Icon size={16} />
+              </a>
+            ))}
+          </div>
         </div>
         <div>
           <div className="text-sm font-semibold text-white mb-3">Company</div>
