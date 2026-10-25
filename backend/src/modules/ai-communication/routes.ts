@@ -181,11 +181,21 @@ async function sendPayload(
   const destination =
     payload.preferredChannel === "email" ? patient.email! : patient.phone!;
 
+  const tenantForSend = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { hospitalName: true },
+  });
   const result = await sendOnChannel(
     payload.preferredChannel as any,
     destination,
     payload.generatedMessage || payload.approvedInstruction,
     tenantId,
+    undefined,
+    {
+      kind: "general",
+      recipientName: patient.guardianName || patient.name,
+      hospitalName: tenantForSend?.hospitalName || "your hospital",
+    },
   );
 
   const updated = await prisma.communicationPayload.update({

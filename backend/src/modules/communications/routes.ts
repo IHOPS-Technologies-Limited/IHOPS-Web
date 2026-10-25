@@ -39,17 +39,25 @@ router.post(
       if (!patient) return res.status(404).json({ error: "Patient not found" });
       const to = channel === "email" ? patient.email : patient.phone;
       if (!to)
-        return res
-          .status(400)
-          .json({
-            error: `Patient has no contact detail on file for ${channel}`,
-          });
+        return res.status(400).json({
+          error: `Patient has no contact detail on file for ${channel}`,
+        });
 
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: req.tenantId! },
+        select: { hospitalName: true },
+      });
       const result = await sendOnChannel(
         channel,
         to,
         messageBody,
         req.tenantId!,
+        undefined,
+        {
+          kind: "general",
+          recipientName: patient.guardianName || patient.name,
+          hospitalName: tenant?.hospitalName || "your hospital",
+        },
       );
       const log = await prisma.communicationLog.create({
         data: {

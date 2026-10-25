@@ -590,6 +590,12 @@ router.post(
             to,
             body,
             req.tenantId!,
+            undefined,
+            {
+              kind: "general",
+              recipientName: patient.guardianName || patient.name,
+              hospitalName: tenant.hospitalName,
+            },
           );
           await prisma.communicationLog.create({
             data: {

@@ -10,7 +10,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { prisma } from "../../lib/prisma";
 import { writeAuditLog } from "../../middleware/audit";
-import { sendEmail } from "../../services/notificationService";
+import { sendEmail, sendWhatsApp } from "../../services/notificationService";
 import { runTrialAndGraceSweep } from "../../jobs/scheduler";
 
 const router = Router();
@@ -270,11 +270,24 @@ router.get(
         ],
         { provider: smsProvider, senderId: process.env.SMS_SENDER_ID || null },
       ),
+      // Templates are REQUIRED to reach patients outside WhatsApp's 24-hour
+      // window, so a missing general template counts as misconfigured.
       integration(
         "whatsapp",
-        "WhatsApp Business",
+        "WhatsApp Business (shared IHOPS number)",
         flag("WHATSAPP_PROVIDER_ENABLED"),
-        ["WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID"],
+        [
+          "WHATSAPP_ACCESS_TOKEN",
+          "WHATSAPP_PHONE_NUMBER_ID",
+          "WHATSAPP_TEMPLATE_GENERAL",
+        ],
+        {
+          generalTemplate: process.env.WHATSAPP_TEMPLATE_GENERAL || null,
+          birthdayTemplate:
+            process.env.WHATSAPP_TEMPLATE_BIRTHDAY || "(uses general)",
+          language: process.env.WHATSAPP_TEMPLATE_LANGUAGE || "en",
+          unitsPerMessage: process.env.WHATSAPP_UNITS_PER_MESSAGE ?? "1",
+        },
       ),
       integration(
         "paystack",
@@ -487,6 +500,41 @@ router.post(
         : result.ok
           ? `Test email accepted by the provider for ${to}. Check the inbox (and spam).`
           : `The provider rejected the email: ${result.error}`,
+    });
+  }),
+);
+
+// Sends the real WhatsApp template to a number you choose, so the whole chain
+// (token, phone number ID, template name/language, payment method) is proven
+// before any patient is messaged. Uses one template message from your Meta
+// balance; no hospital wallet is charged.
+router.post(
+  "/system/test-whatsapp",
+  h(async (req, res) => {
+    const { to } = z
+      .object({ to: z.string().trim().min(7).max(30) })
+      .parse(req.body);
+    const result = await sendWhatsApp(
+      to,
+      "This is a test message from the IHOPS Internal console. If you can read this, WhatsApp delivery is working.",
+      { kind: "general", recipientName: "Test", hospitalName: "IHOPS" },
+    );
+    await writeAuditLog({
+      superAdminId: req.superAdmin!.id,
+      actionType: "superadmin.test_whatsapp",
+      entityType: "System",
+      metadata: { ok: result.ok },
+    });
+    const live = flag("WHATSAPP_PROVIDER_ENABLED");
+    res.json({
+      ok: result.ok,
+      error: result.ok ? undefined : result.error,
+      mocked: !live,
+      message: !live
+        ? "WHATSAPP_PROVIDER_ENABLED is not “true”, so nothing was actually sent."
+        : result.ok
+          ? "WhatsApp accepted the message. Check the phone — delivery can take a few seconds."
+          : result.error,
     });
   }),
 );

@@ -88,6 +88,24 @@ function whatsappErrorMessage(err: {
     case 200:
     case 131005:
       return `The access token lacks permission to send WhatsApp messages (needs whatsapp_business_messaging). ${tag}`;
+    case 132001:
+      return `The WhatsApp message template wasn't found. Check that WHATSAPP_TEMPLATE_GENERAL / WHATSAPP_TEMPLATE_BIRTHDAY exactly match the approved template names, and that WHATSAPP_TEMPLATE_LANGUAGE matches the template's language code. ${tag}`;
+    case 132000:
+    case 132012:
+    case 132018:
+      return `WhatsApp rejected the template's filled-in values (wrong number of values, or text with line breaks / long runs of spaces). ${tag}`;
+    case 132015:
+    case 132016:
+      return `This WhatsApp template is paused or disabled by Meta (usually due to low quality ratings). Review it in WhatsApp Manager. ${tag}`;
+    case 131042:
+      return `Meta can't bill the WhatsApp account — add or fix the payment method on the WhatsApp Business Account in Meta Business Settings. ${tag}`;
+    case 131049:
+      return `Meta declined to deliver this message to keep the patient from receiving too many marketing messages. It may deliver on a later attempt. ${tag}`;
+    case 131048:
+    case 130429:
+    case 131056:
+    case 80007:
+      return `WhatsApp is rate-limiting sends right now (too many messages too quickly, or to the same patient). Try again shortly. ${tag}`;
     case 100:
       return `WhatsApp rejected a parameter — usually the Phone Number ID is wrong (use the numeric ID, not the phone number) or the patient's number is malformed. ${tag}`;
     default:
@@ -95,12 +113,60 @@ function whatsappErrorMessage(err: {
   }
 }
 
+// ---------------------------------------------------------------------------
+// WhatsApp (one shared IHOPS number for every hospital)
+//
+// WhatsApp only lets a business start a conversation — or write to someone who
+// hasn't messaged it in the last 24 hours — with a pre-approved TEMPLATE, never
+// free text. IHOPS therefore sends template messages:
+//
+//   general  (UTILITY)   "Hello {{1}}, you have a message from {{2}}: {{3}} …"
+//                        {{1}} recipient, {{2}} hospital, {{3}} the message text
+//   birthday (MARKETING) "Happy Birthday, {{1}}! … everyone at {{2}} …"
+//                        {{1}} recipient, {{2}} hospital (message text unused)
+//
+// Names come from WHATSAPP_TEMPLATE_GENERAL / WHATSAPP_TEMPLATE_BIRTHDAY. If the
+// birthday template isn't set, birthdays use the general template. If NO
+// template is configured at all, it falls back to free text, which only works
+// inside the 24-hour window (kept so existing setups don't break).
+// Because the hospital's name is a template value, one number serves everyone.
+// ---------------------------------------------------------------------------
+export type WhatsAppContext = {
+  kind: "general" | "birthday";
+  recipientName: string;
+  hospitalName: string;
+};
+
+// Template values can't contain line breaks/tabs or 4+ consecutive spaces
+// (Meta error 132018), so flatten them; and Meta caps a template body at 1024
+// characters — rather than silently cutting off a clinical instruction we
+// refuse to send an over-long message.
+const WA_MAX_MESSAGE_CHARS = 800;
+function waParam(text: string): string {
+  return text
+    .replace(/\s*[\r\n\t]+\s*/g, " ")
+    .replace(/ {4,}/g, "   ")
+    .trim();
+}
+
+export function whatsappTemplateFor(
+  kind: WhatsAppContext["kind"],
+): string | null {
+  const general = process.env.WHATSAPP_TEMPLATE_GENERAL?.trim() || null;
+  const birthday = process.env.WHATSAPP_TEMPLATE_BIRTHDAY?.trim() || null;
+  return kind === "birthday" ? birthday || general : general;
+}
+
 export async function sendWhatsApp(
   to: string,
   body: string,
+  ctx?: WhatsAppContext,
 ): Promise<SendResult> {
+  const templateName = ctx ? whatsappTemplateFor(ctx.kind) : null;
   if (!whatsappEnabled) {
-    console.log(`[MOCK WHATSAPP] to=${to} :: ${body}`);
+    console.log(
+      `[MOCK WHATSAPP] to=${to} ${templateName ? `template=${templateName} ` : ""}:: ${body}`,
+    );
     return { ok: true, providerRef: `mock-wa-${Date.now()}` };
   }
   const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
@@ -115,6 +181,54 @@ export async function sendWhatsApp(
     };
   }
 
+  let payload: Record<string, unknown>;
+  if (templateName && ctx) {
+    const language = process.env.WHATSAPP_TEMPLATE_LANGUAGE?.trim() || "en";
+    const usesBirthdayTemplate =
+      ctx.kind === "birthday" &&
+      !!process.env.WHATSAPP_TEMPLATE_BIRTHDAY?.trim();
+    const values = usesBirthdayTemplate
+      ? [ctx.recipientName, ctx.hospitalName]
+      : [ctx.recipientName, ctx.hospitalName, body];
+    const params = values.map((v) => waParam(v));
+    if (params.some((v) => v === "")) {
+      return {
+        ok: false,
+        error:
+          "WhatsApp message is missing a required value (recipient name, hospital name or message text).",
+      };
+    }
+    if (!usesBirthdayTemplate && params[2].length > WA_MAX_MESSAGE_CHARS) {
+      return {
+        ok: false,
+        error: `This message is ${params[2].length} characters — WhatsApp templates allow about ${WA_MAX_MESSAGE_CHARS}. Shorten it (or send it by SMS/email).`,
+      };
+    }
+    payload = {
+      messaging_product: "whatsapp",
+      to: normalizeWhatsAppNumber(to),
+      type: "template",
+      template: {
+        name: templateName,
+        language: { code: language },
+        components: [
+          {
+            type: "body",
+            parameters: params.map((text) => ({ type: "text", text })),
+          },
+        ],
+      },
+    };
+  } else {
+    // No template configured: free text (only delivered inside the 24h window).
+    payload = {
+      messaging_product: "whatsapp",
+      to: normalizeWhatsAppNumber(to),
+      type: "text",
+      text: { body },
+    };
+  }
+
   try {
     const response = await fetch(
       `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`,
@@ -124,12 +238,7 @@ export async function sendWhatsApp(
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          to: normalizeWhatsAppNumber(to),
-          type: "text",
-          text: { body },
-        }),
+        body: JSON.stringify(payload),
       },
     );
     const result = (await response.json()) as {
@@ -450,15 +559,59 @@ export async function sendOnChannel(
   body: string,
   tenantId?: string,
   subject = "IHOPS Notification",
+  whatsapp?: WhatsAppContext,
 ): Promise<SendResult> {
   switch (channel) {
     case "whatsapp":
-      return sendWhatsApp(to, body);
+      return sendBilledWhatsApp(to, body, tenantId, whatsapp);
     case "sms":
       return sendBilledSms(to, body, tenantId);
     case "email":
       return sendEmail(to, subject, body);
   }
+}
+
+// WhatsApp template messages cost IHOPS real money (Meta bills the account per
+// delivered template message), so — like SMS — they draw on the hospital's
+// prepaid wallet. WHATSAPP_UNITS_PER_MESSAGE sets the price in units (default
+// 1; set 0 to make WhatsApp free to hospitals). Failed sends are refunded.
+function whatsappUnits(): number {
+  const n = parseInt(process.env.WHATSAPP_UNITS_PER_MESSAGE ?? "1", 10);
+  return Number.isFinite(n) && n >= 0 ? n : 1;
+}
+
+async function sendBilledWhatsApp(
+  to: string,
+  body: string,
+  tenantId?: string,
+  ctx?: WhatsAppContext,
+): Promise<SendResult> {
+  const units = whatsappUnits();
+  if (!tenantId || units === 0) return sendWhatsApp(to, body, ctx);
+
+  const debited = await debitSmsUnit(
+    tenantId,
+    undefined,
+    units,
+    undefined,
+    "WhatsApp message",
+  );
+  if (!debited) {
+    return {
+      ok: false,
+      error: `Insufficient balance — a WhatsApp message uses ${units} unit${units === 1 ? "" : "s"}. Top up SMS units to keep sending.`,
+    };
+  }
+  const result = await sendWhatsApp(to, body, ctx);
+  if (!result.ok) {
+    await refundSmsUnit(
+      tenantId,
+      result.error?.slice(0, 120) || "WhatsApp send failed",
+      undefined,
+      units,
+    );
+  }
+  return result;
 }
 
 // Debit-then-send-then-refund-on-failure wrapper around sendSms(). Missing

@@ -41,6 +41,7 @@ export default function SystemStatus() {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<Notice>(null);
   const [testTo, setTestTo] = useState("");
+  const [waTo, setWaTo] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
 
   function load() {
@@ -59,6 +60,21 @@ export default function SystemStatus() {
     try {
       const r = await superAdminApi.post("/internal/system/test-email", {
         to: testTo,
+      });
+      setNotice({ kind: r.ok && !r.mocked ? "ok" : "error", text: r.message });
+    } catch (e: any) {
+      setNotice({ kind: "error", text: errText(e) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function testWhatsApp() {
+    setBusy("wa");
+    setNotice(null);
+    try {
+      const r = await superAdminApi.post("/internal/system/test-whatsapp", {
+        to: waTo,
       });
       setNotice({ kind: r.ok && !r.mocked ? "ok" : "error", text: r.message });
     } catch (e: any) {
@@ -215,6 +231,31 @@ export default function SystemStatus() {
               <p className="text-xs text-slate-500 mt-2">
                 Confirms signup, verification and password-reset emails can
                 actually be delivered.
+              </p>
+            </div>
+            <div className="mt-4 pt-4 border-t border-white/5">
+              <div className="text-sm font-medium text-white mb-2">
+                Send a test WhatsApp message
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  className={`${darkInput} max-w-xs`}
+                  placeholder="0803 123 4567"
+                  value={waTo}
+                  onChange={(e) => setWaTo(e.target.value)}
+                />
+                <button
+                  className={amberButton}
+                  disabled={!waTo || busy === "wa"}
+                  onClick={testWhatsApp}
+                >
+                  {busy === "wa" ? "Sending…" : "Send test"}
+                </button>
+              </div>
+              <p className="text-xs text-slate-500 mt-2">
+                Sends your approved template to that number (uses one WhatsApp
+                message from your Meta account). Do this before real patients
+                are messaged.
               </p>
             </div>
           </Card>

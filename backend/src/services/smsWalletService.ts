@@ -173,6 +173,7 @@ export async function debitSmsUnit(
   communicationLogId?: string,
   units = 1,
   detail?: string,
+  label = "patient SMS",
 ): Promise<boolean> {
   const wallet = await getOrCreateWallet(tenantId);
   const result = await prisma.smsWallet.updateMany({
@@ -188,7 +189,7 @@ export async function debitSmsUnit(
       units: -units,
       status: "success",
       communicationLogId,
-      description: `${units} unit${units === 1 ? "" : "s"} — patient SMS${detail ? ` (${detail})` : " sent"}`,
+      description: `${units} unit${units === 1 ? "" : "s"} — ${label}${detail ? ` (${detail})` : " sent"}`,
     },
   });
   return true;

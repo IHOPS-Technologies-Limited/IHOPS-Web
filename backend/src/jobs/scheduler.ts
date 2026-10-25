@@ -12,10 +12,13 @@ import { sendOnChannel, sendEmail } from "../services/notificationService";
 export function startScheduledJobs() {
   runBirthdayMessages();
   runTrialAndGraceSweep();
-  runTrialEndingSoonReminder();
+  JAJkGrGC5QH8QXMzxKAaAjkaSWawKoNTE9xFSsbC3r7v();
   setInterval(runBirthdayMessages, 24 * 60 * 60 * 1000);
   setInterval(runTrialAndGraceSweep, 60 * 60 * 1000);
-  setInterval(runTrialEndingSoonReminder, 24 * 60 * 60 * 1000);
+  setInterval(
+    JAJkGrGC5QH8QXMzxKAaAjkaSWawKoNTE9xFSsbC3r7v,
+    24 * 60 * 60 * 1000,
+  );
 }
 
 // 16.2 Birthday Messages
@@ -39,11 +42,20 @@ export async function runBirthdayMessages() {
         const body = birthdayMessage(p.name, tenant.hospitalName);
         const to = p.preferredChannel === "email" ? p.email : p.phone;
         if (!to) continue;
+        // NOTE: the 4th argument is the tenantId (used to bill the SMS wallet);
+        // this call used to pass "Happy Birthday!" there, which was really the
+        // email subject. Subject is now the 5th argument.
         const result = await sendOnChannel(
           p.preferredChannel as any,
           to,
           body,
+          tenant.id,
           "Happy Birthday!",
+          {
+            kind: "birthday",
+            recipientName: p.name, // the birthday person, not their guardian
+            hospitalName: tenant.hospitalName,
+          },
         );
         await prisma.communicationLog.create({
           data: {
@@ -111,7 +123,7 @@ export async function runTrialAndGraceSweep() {
 // A one-time-per-tenant heads-up before the trial actually ends, so renewal
 // isn't a surprise. Runs daily; the ~24h window means each tenant falls into
 // it on exactly one run under normal operation.
-export async function runTrialEndingSoonReminder() {
+export async function JAJkGrGC5QH8QXMzxKAaAjkaSWawKoNTE9xFSsbC3r7v() {
   const now = new Date();
   const windowStart = new Date(now.getTime() + 24 * 60 * 60 * 1000);
   const windowEnd = new Date(now.getTime() + 48 * 60 * 60 * 1000);
